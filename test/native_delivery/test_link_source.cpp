@@ -106,4 +106,16 @@ int main(int, char** argv) {
   now_ms+=600000;CHECK(LinkSensor::isStale());CHECK(LinkSensor::temperature()==24);   // newest stale reading
   CHECK(LinkSensor::status()==SL2_ROOMST_STALE);
  }
+ CASE("forget_dial_request_drops_one_bond_and_its_reading") {
+  average();auto pa=reading(2000),pb=reading(2200);LinkSensor::feed(a,&pa);LinkSensor::feed(b,&pb);
+  tick(c);CHECK(c.temp==21);
+  CHECK(queue_forget_dial(b));CHECK(queue_forget_dial(b));   // a repeated click queues once
+  drain_forget_dials();
+  uint8_t m[6];CHECK(sl2_link_dial_count(&s_link)==1);CHECK(sl2_link_dial_mac(&s_link,0,m)&&!memcmp(m,a,6));
+  LinkSensor::Reading r[SL2_MAX_DIALS];CHECK(LinkSensor::readings(r)==1);CHECK(!memcmp(r[0].mac,a,6));
+  now_ms+=6000;tick(c);CHECK(c.temp==20);
+  drain_forget_dials();CHECK(sl2_link_dial_count(&s_link)==1);   // nothing left queued
+  const uint8_t stranger[6]={7,7,7,7,7,7};CHECK(queue_forget_dial(stranger));drain_forget_dials();
+  CHECK(sl2_link_dial_count(&s_link)==1);CHECK(LinkSensor::readings(r)==1);
+ }
 }

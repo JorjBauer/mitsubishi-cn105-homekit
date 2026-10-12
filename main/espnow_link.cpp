@@ -112,6 +112,50 @@ static volatile bool    s_reqPairCancel    = false;
 static volatile bool    s_reqForgetAll     = false;
 static volatile bool    s_reqForgetRestart = false;   // forget + LED + esp_restart()
 
+/* Per-dial forget mailbox (web forgetDial). A small set rather than one flag,
+ * so quick clicks on two dials both land; a repeat of a queued MAC is a no-op.
+ * Producers on any task, drained by loop(). */
+static portMUX_TYPE s_forgetMux = portMUX_INITIALIZER_UNLOCKED;
+static uint8_t      s_forgetMacs[SL2_MAX_DIALS][6];
+static int          s_forgetCount = 0;
+
+static bool queue_forget_dial(const uint8_t mac[6]) {
+    bool queued = true;
+    portENTER_CRITICAL(&s_forgetMux);
+    int i = 0;
+    while (i < s_forgetCount && memcmp(s_forgetMacs[i], mac, 6) != 0) i++;
+    if (i == s_forgetCount) {
+        if (s_forgetCount < SL2_MAX_DIALS) memcpy(s_forgetMacs[s_forgetCount++], mac, 6);
+        else queued = false;
+    }
+    portEXIT_CRITICAL(&s_forgetMux);
+    return queued;
+}
+
+/* Main task. The bond, the radio peer and the dial's room reading go
+ * together; a Link pin on that dial is repaired by
+ * room_source_reconcile_catalog() on its next pass. No restart, unlike
+ * forget-all: the remaining dials keep running. */
+static void drain_forget_dials(void) {
+    uint8_t macs[SL2_MAX_DIALS][6];
+    portENTER_CRITICAL(&s_forgetMux);
+    const int n = s_forgetCount;
+    memcpy(macs, s_forgetMacs, sizeof macs);
+    s_forgetCount = 0;
+    portEXIT_CRITICAL(&s_forgetMux);
+    for (int i = 0; i < n; i++) {
+        const uint8_t *m = macs[i];
+        if (!sl2_link_forget_dial(&s_link, m)) {
+            LOG_WARN("Serin Link: dial %02X:%02X:%02X:%02X:%02X:%02X not forgotten",
+                     m[0], m[1], m[2], m[3], m[4], m[5]);
+            continue;
+        }
+        LinkSensor::forget(m);
+        LOG_INFO("Serin Link: forgot dial %02X:%02X:%02X:%02X:%02X:%02X",
+                 m[0], m[1], m[2], m[3], m[4], m[5]);
+    }
+}
+
 /* Status snapshot, refreshed by loop() on the main task. The web (httpd) and
  * console tasks read this adapter-owned copy instead of calling into the core,
  * so the single-context contract holds for reads as well as writes (no
@@ -124,6 +168,8 @@ struct LinkStatus {
     uint8_t mac0[6] = {};
     int     dialCount = 0;
     uint8_t dialMac[SL2_MAX_DIALS][6] = {};
+    bool    dialLive[SL2_MAX_DIALS] = {};
+    int32_t dialSeenSec[SL2_MAX_DIALS] = {};
     /* Interned literal from the core (sl2_link.c only ever assigns string
      * constants) — a single aligned pointer store is tear-free for the
      * httpd/console reader tasks, unlike a byte-wise buffer copy. */
@@ -1034,11 +1080,14 @@ static void snapshot_status(void) {
     s_stat.secsLeft = sl2_link_pair_seconds_left(&s_link);
     if (!sl2_link_dial_mac(&s_link, 0, s_stat.mac0)) memset(s_stat.mac0, 0, 6);
     s_stat.dialCount = sl2_link_dial_count(&s_link);
+    sl2_dial_view_t dv;
     for (int i = 0; i < SL2_MAX_DIALS; i++) {
         if (!sl2_link_dial_mac(&s_link, i, s_stat.dialMac[i]))
             memset(s_stat.dialMac[i], 0, 6);
+        const bool have = sl2_link_dial_view(&s_link, i, &dv);
+        s_stat.dialLive[i] = have && dv.live;
+        s_stat.dialSeenSec[i] = (!have || dv.last_seen_ms < 0) ? -1 : dv.last_seen_ms / 1000;
     }
-    sl2_dial_view_t dv;
     if (sl2_link_dial_view(&s_link, 0, &dv)) {
         s_stat.lastSeenSec = dv.last_seen_ms < 0 ? -1 : (dv.last_seen_ms / 1000);
         s_stat.rssi = rssi_for(dv.mac);
@@ -1153,6 +1202,7 @@ void EspnowLink::loop() {
             room_source_drop_link();
         }
     }
+    drain_forget_dials();
     if (s_reqPairStart)  { s_reqPairStart = false;  sl2_link_pair_start(&s_link, PAIR_WINDOW_S * 1000); }
     if (s_reqPairCancel) { s_reqPairCancel = false; sl2_link_pair_cancel(&s_link); }
     if (s_reqForgetRestart) {
@@ -1211,6 +1261,20 @@ bool EspnowLink::bondedDialMac(int slot, uint8_t mac[6]) const {
     if (slot < 0 || slot >= SL2_MAX_DIALS || slot >= s_stat.dialCount) return false;
     memcpy(mac, s_stat.dialMac[slot], 6);
     return true;
+}
+bool EspnowLink::bondedDial(int slot, EspnowDialRow &out) const {
+    if (slot < 0 || slot >= SL2_MAX_DIALS || slot >= s_stat.dialCount) return false;
+    memcpy(out.mac, s_stat.dialMac[slot], 6);
+    out.live = s_stat.dialLive[slot];
+    out.lastSeenSec = s_stat.dialSeenSec[slot];
+    return true;
+}
+bool EspnowLink::forgetDial(const uint8_t mac[6]) {
+    if (!s_started) return false;
+    bool bonded = false;
+    for (int i = 0; i < s_stat.dialCount && i < SL2_MAX_DIALS && !bonded; i++)
+        bonded = memcmp(s_stat.dialMac[i], mac, 6) == 0;
+    return bonded && queue_forget_dial(mac);
 }
 bool EspnowLink::getDialDetail(EspnowDialDetail &out) const {
     if (!s_stat.bonded) return false;
@@ -1309,6 +1373,8 @@ bool EspnowLink::isPeerLive() const { return false; }
 void EspnowLink::getPeerMac(uint8_t out[6]) const { for (int i = 0; i < 6; i++) out[i] = 0; }
 int EspnowLink::bondedDialCount() const { return 0; }
 bool EspnowLink::bondedDialMac(int slot, uint8_t mac[6]) const { (void)slot; (void)mac; return false; }
+bool EspnowLink::bondedDial(int slot, EspnowDialRow &out) const { (void)slot; (void)out; return false; }
+bool EspnowLink::forgetDial(const uint8_t mac[6]) { (void)mac; return false; }
 bool EspnowLink::getDialDetail(EspnowDialDetail &out) const { (void)out; return false; }
 // Simplified default, matching every other query on this stub facade: no
 // link means Link can never be the selected source, so Internal — always

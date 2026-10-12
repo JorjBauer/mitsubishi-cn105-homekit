@@ -639,6 +639,21 @@ void WebUI::handleWsMessage(httpd_req_t *req, const char *msg) {
         sendWsText(httpd_req_to_sockfd(req), "{\"type\":\"info\",\"msg\":\"Forgetting remote...\"}");
         espnow_forget_and_restart();
 
+    } else if (strcmp(cmd, "forgetDial") == 0) {
+        // One bonded dial, by MAC: the others stay paired and nothing
+        // restarts. 24 B so an over-long value fails the 17-char MAC parse
+        // instead of being truncated into one.
+        char macStr[24] = "";
+        uint8_t mac[6];
+        if (!jsonGetString(msg, "mac", macStr, sizeof(macStr)) ||
+            !mac_from_str(macStr, mac) || !espnowLink.forgetDial(mac)) {
+            sendWsText(httpd_req_to_sockfd(req),
+                       "{\"type\":\"error\",\"msg\":\"That Link is not paired to this unit\"}");
+            return;
+        }
+        LOG_WARN("Serin Link forget requested for %s", macStr);
+        sendWsText(httpd_req_to_sockfd(req), "{\"type\":\"info\",\"msg\":\"Forgetting Link...\"}");
+
     } else if (strcmp(cmd, "pairRemote") == 0) {
         LOG_INFO("ESP-NOW pairing window requested");
         espnowLink.startPairing();
@@ -889,6 +904,26 @@ void WebUI::pushState() {
             espnowLink.pairingActive() ? "true" : "false",
             espnowLink.pairingSecondsLeft(),
             espnowLink.pairResult());
+
+        // Every bonded dial, for the card's per-dial Forget list; t is that
+        // dial's own fresh reading. Worst case 4 x 72 B + 17 B framing.
+        LinkSensor::Reading rd[SL2_MAX_DIALS];
+        const int nr = LinkSensor::readings(rd);
+        stateAppend(buf, bufSz, &n, &want, ",\"remoteDials\":[");
+        EspnowDialRow row;
+        for (int i = 0; espnowLink.bondedDial(i, row); i++) {
+            char t[8] = "null";
+            for (int j = 0; j < nr; j++)
+                if (memcmp(rd[j].mac, row.mac, 6) == 0 && rd[j].fresh &&
+                    !std::isnan(rd[j].temperature))
+                    snprintf(t, sizeof(t), "%.2f", rd[j].temperature);
+            stateAppend(buf, bufSz, &n, &want,
+                "%s{\"mac\":\"%02X:%02X:%02X:%02X:%02X:%02X\",\"live\":%s,\"seen\":%ld,\"t\":%s}",
+                i ? "," : "", row.mac[0], row.mac[1], row.mac[2], row.mac[3],
+                row.mac[4], row.mac[5], row.live ? "true" : "false",
+                (long)row.lastSeenSec, t);
+        }
+        stateAppend(buf, bufSz, &n, &want, "]");
 
         EspnowDialDetail dd;
         if (espnowLink.getDialDetail(dd)) {

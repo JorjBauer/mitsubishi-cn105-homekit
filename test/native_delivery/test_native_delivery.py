@@ -166,18 +166,27 @@ adapter = (MAIN / "espnow_link.cpp").read_text()
 # store is a fixture; its two MACs stand for already-authenticated peers.
 LINK += r'''
 #define ROOM_CATALOG_MAX (2 + ROOM_MAX_BLE_SENSORS + 1 + SL2_MAX_DIALS)
-struct BondedDials {};
+#define portENTER_CRITICAL(mux) ((void)(mux))
+#define portEXIT_CRITICAL(mux) ((void)(mux))
+struct BondedDials {int n=2;uint8_t mac[SL2_MAX_DIALS][6]={{1,2,3,4,5,6},{6,5,4,3,2,1}};};
 static BondedDials s_link;
-static int sl2_link_dial_count(const BondedDials*) {return 2;}
-static bool sl2_link_dial_mac(const BondedDials*,int index,uint8_t out[6]) {
- const uint8_t macs[2][6]={{1,2,3,4,5,6},{6,5,4,3,2,1}};
- if(index<0||index>=2)return false;
- memcpy(out,macs[index],6);return true;
+static int sl2_link_dial_count(const BondedDials* l) {return l->n;}
+static bool sl2_link_dial_mac(const BondedDials* l,int index,uint8_t out[6]) {
+ if(index<0||index>=l->n)return false;
+ memcpy(out,l->mac[index],6);return true;
+}
+static bool sl2_link_forget_dial(BondedDials* l,const uint8_t mac[6]) {
+ for(int i=0;i<l->n;i++)if(!memcmp(l->mac[i],mac,6)){
+  memmove(l->mac[i],l->mac[i+1],(size_t)(l->n-i-1)*6);l->n--;return true;}
+ return false;
 }
 '''
 LINK += "\n" + function((MAIN / "esp_utils.h").read_text(), "fnv1a32")
 LINK += "\n" + "\n".join(function(adapter, n) for n in
     ["copy_name", "room_catalog_build", "room_catalog_hash", "room_catalog_revision", "h_room_source_set"])
+# The web forgetDial mailbox and its main-task drain, statics included.
+LINK += "\n" + adapter[adapter.index("/* Per-dial forget mailbox"):adapter.index("static void drain_forget_dials")]
+LINK += "\n" + function(adapter, "drain_forget_dials")
 thermo_name = "homekit_thermostat.cpp" if (MAIN / "homekit_thermostat.cpp").exists() else "matter_thermostat.cpp"
 thermo = (MAIN / thermo_name).read_text()
 strings = (MAIN / "cn105_strings.h").read_text()

@@ -33,6 +33,13 @@ struct EspnowDialDetail {
     uint8_t certState;     // sl2_cert_state_t: 0 NONE/1 PRESENT/2 INVALID/3 OK
 };
 
+// One bonded dial, for the Link card's per-dial list.
+struct EspnowDialRow {
+    uint8_t mac[6];
+    bool    live;          // probed within the liveness window
+    int32_t lastSeenSec;   // seconds since last heard; -1 if never
+};
+
 class EspnowLink {
 public:
     void begin(CN105Controller *ctrl);   // call AFTER WiFi started + esp_now usable
@@ -44,6 +51,11 @@ public:
     // first dial: how many are bonded, and each one's MAC by slot.
     int  bondedDialCount() const;
     bool bondedDialMac(int slot, uint8_t mac[6]) const;   // false if slot is out of range/empty
+    bool bondedDial(int slot, EspnowDialRow &out) const;  // same range rule
+    // Forget one bonded dial (bond, radio peer and its room reading) without
+    // the restart forget-all does; the other dials stay paired. False if the
+    // MAC is not bonded. Any task: loop() runs it on the main task.
+    bool forgetDial(const uint8_t mac[6]);
     bool getDialDetail(EspnowDialDetail &out) const;  // false if not bonded
     // Health of the room-temperature source currently selected in settings
     // (enum sl2_room_status). The same check the INFO TLV publishes to the
