@@ -1,5 +1,6 @@
 #include "web_server.h"
 #include "json_utils.h"
+#include "web_security.h"
 #include "event_log.h"
 #include "branding.h"
 #include "wifi_manager.h"
@@ -11,6 +12,9 @@
 #include <cstdio>
 #include <lwip/sockets.h>
 #include <array>
+#if !CONFIG_HTTPD_WS_PRE_HANDSHAKE_CB_SUPPORT
+#error "Origin check needs CONFIG_HTTPD_WS_PRE_HANDSHAKE_CB_SUPPORT=y (sdkconfig.defaults)"
+#endif
 #include "esp_rom_crc.h"
 
 static const char *TAG = "web";
@@ -162,6 +166,22 @@ static esp_err_t handleRedirect404(httpd_req_t *req, httpd_err_code_t) {
 // WiFi status and setup handlers
 // ══════════════════════════════════════════════════════════════════════════════
 
+bool WebUI::requireSameOrigin(httpd_req_t *req) {
+    char origin[128] = "", host[128] = "";
+    size_t ol = httpd_req_get_hdr_value_len(req, "Origin");
+    if (ol == 0) return true;   // curl, native apps, same-origin without the header
+    size_t hl = httpd_req_get_hdr_value_len(req, "Host");
+    bool ok = ol < sizeof(origin) && hl < sizeof(host) &&
+              httpd_req_get_hdr_value_str(req, "Origin", origin, sizeof(origin)) == ESP_OK &&
+              (hl == 0 || httpd_req_get_hdr_value_str(req, "Host", host, sizeof(host)) == ESP_OK) &&
+              webOriginAllowed(origin, host);
+    if (!ok) {
+        LOG_WARN("Rejected cross-origin request to %s (Origin: %.60s)", req->uri, origin);
+        httpd_resp_send_err(req, HTTPD_403_FORBIDDEN, "Cross-origin request refused");
+    }
+    return ok;
+}
+
 esp_err_t WebUI::handleWifiStatus(httpd_req_t *req) {
     // Load cached SSID from NVS
     char ssid[33] = "";
@@ -197,7 +217,7 @@ esp_err_t WebUI::handleWifiStatus(httpd_req_t *req) {
         ",\"joined\":%s,\"trial\":\"%s\",\"hkSetupCode\":\"%s\"}",
         escSSID, escName, connected ? "true" : "false",
         joined ? "true" : "false", trial,
-        homekit_get_setup_code());
+        webHkSetupValue(true, homekit_get_controller_count(), homekit_get_setup_code()));
 
     httpd_resp_set_type(req, "application/json");
     httpd_resp_sendstr(req, buf);
@@ -237,8 +257,14 @@ bool WebUI::applyWifiCredentials(const char *json, const char **outError) {
         *outError = "SSID is required";
         return false;
     }
-    // Password is optional (open networks send empty password)
-    jsonGetString(json, "password", password, sizeof(password));
+    // Password is optional (open networks send empty password), but one that is
+    // present and cannot be read whole (unterminated string) must fail the
+    // request rather than join with a truncated secret.
+    if (!jsonGetString(json, "password", password, sizeof(password)) &&
+        jsonHasKey(json, "password")) {
+        *outError = "Password is malformed";
+        return false;
+    }
     LOG_INFO("Applying WiFi credentials (SSID: %s)", ssid);
     // Logs the ATTEMPT — the credentials themselves are only committed to NVS
     // by WifiManager::loop() after the trial join succeeds.
@@ -256,11 +282,26 @@ bool WebUI::applyWifiCredentials(const char *json, const char **outError) {
 }
 
 esp_err_t WebUI::handleWifiSetup(httpd_req_t *req) {
-    char body[150] = {0};
-    int received = httpd_req_recv(req, body, sizeof(body) - 1);
-    if (received <= 0) {
-        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Empty request");
+    if (!requireSameOrigin(req)) return ESP_FAIL;
+    // Read the whole declared body (capped), never a prefix: a clipped body
+    // would end inside a JSON string and connect() would get a truncated
+    // password.
+    int want = webBodyLen(req->content_len, WIFI_SETUP_MAX_BODY);
+    if (want < 0) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST,
+                            req->content_len == 0 ? "Empty request" : "Request too large");
         return ESP_FAIL;
+    }
+    char body[WIFI_SETUP_MAX_BODY + 1];
+    int received = 0, stalls = 0;
+    while (received < want) {
+        int r = httpd_req_recv(req, body + received, want - received);
+        if (r == HTTPD_SOCK_ERR_TIMEOUT && ++stalls < 3) continue;
+        if (r <= 0) {
+            httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Incomplete request");
+            return ESP_FAIL;
+        }
+        received += r;
     }
     body[received] = '\0';
 
@@ -276,6 +317,7 @@ esp_err_t WebUI::handleWifiSetup(httpd_req_t *req) {
 }
 
 esp_err_t WebUI::handleIdentify(httpd_req_t *req) {
+    if (!requireSameOrigin(req)) return ESP_FAIL;
     status_led_identify();
     httpd_resp_set_type(req, "application/json");
     httpd_resp_sendstr(req, "{\"status\":\"ok\"}");
@@ -434,7 +476,8 @@ void WebUI::begin(CN105Controller *ctrl) {
         .user_ctx  = this,
         .is_websocket = true,
         .handle_ws_control_frames = false,
-        .supported_subprotocol = NULL
+        .supported_subprotocol = NULL,
+        .ws_pre_handshake_cb = wsPreHandshake
     };
     httpd_register_uri_handler(_server, &wsUri);
 

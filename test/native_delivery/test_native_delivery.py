@@ -52,6 +52,7 @@ HOST = r'''
 #include "sl2_proto.h"
 #include "cn105_baud.h"
 #include "uart_interface.h"
+// The host tests read CN105Controller::_tempMode and _wanted directly, so private is opened here; keep this define below the system includes.
 #define private public
 using uart_port_t=int;
 using portMUX_TYPE=int;

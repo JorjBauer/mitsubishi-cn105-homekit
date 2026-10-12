@@ -836,6 +836,7 @@ a:focus-visible,button:focus-visible,input:focus-visible,select:focus-visible{ou
       <div class="stack-tight" style="flex:1;min-width:0">
         <div class="t">Paired with HomeKit</div>
         <div class="b" id="hkControllers">--</div>
+        <div class="b" id="hkSetupHidden" style="display:none">Setup code hidden after pairing. Reset HomeKit pairing to show it.</div>
       </div>
       <button class="btn-secondary grow0" id="hkShowSetupBtn">Show Setup Code</button>
     </div>
@@ -1205,6 +1206,10 @@ a:focus-visible,button:focus-visible,input:focus-visible,select:focus-visible{ou
   // both the state push and the toggle button so the two can't drift.
   function renderHkSetupToggle(){
     $('hkPairing').style.display=(hkPairedNow&&!hkSetupExpanded)?'none':'';
+    // The firmware stops sending the setup code once paired, so there is
+    // nothing to reveal: say so instead of offering an empty panel.
+    $('hkShowSetupBtn').style.display=hkPairedNow?'none':'';
+    $('hkSetupHidden').style.display=hkPairedNow?'':'none';
     $('hkShowSetupBtn').textContent=hkSetupExpanded?'Hide Setup Code':'Show Setup Code';
   }
 
@@ -2370,6 +2375,9 @@ a:focus-visible,button:focus-visible,input:focus-visible,select:focus-visible{ou
       if(s.hkSetupURI&&s.hkSetupURI!==lastQRURI){
         lastQRURI=s.hkSetupURI;
         renderQR(s.hkSetupURI,qrCanvas);
+      }else if(!s.hkSetupURI&&lastQRURI){
+        lastQRURI='';
+        qrCanvas.getContext('2d').clearRect(0,0,qrCanvas.width,qrCanvas.height);
       }
       $('hkButtons').style.display=(lastQRURI&&hkAppleUA)?'flex':'none';
     }
@@ -3790,16 +3798,25 @@ a:focus-visible,button:focus-visible,input:focus-visible,select:focus-visible{ou
     }).catch(function(e){showToast('Import failed: '+(e.message||e),true)});
   };
 
+  // Destructive commands need a typed word; the firmware refuses the frame
+  // without it (there is no LAN authentication, so a bare command is not
+  // proof of intent).
+  function typedConfirm(text,word,what){
+    var v=prompt(text+'\n\nType '+word+' to confirm:');
+    if(v===null) return false;
+    if(v.trim().toUpperCase()!==word){showToast(what+' cancelled',true);return false}
+    return true;
+  }
+
   window.factoryReset=function(){
     if(!ensureConnected()) return;
-    var v=prompt('This erases ALL settings, Wi-Fi credentials, and HomeKit pairing, then restarts the device into setup mode.\n\nType ERASE to confirm:');
-    if(v===null) return;
-    if(v.trim().toUpperCase()!=='ERASE'){showToast('Factory reset cancelled',true);return}
+    if(!typedConfirm('This erases ALL settings, Wi-Fi credentials, and HomeKit pairing, then restarts the device into setup mode.','ERASE','Factory reset')) return;
     send({cmd:'factoryReset',confirm:'ERASE'});
   };
 
   window.restartDevice=function(){
-    if(confirm('Restart the device?')){send({cmd:'restart'})}
+    if(!ensureConnected()) return;
+    if(typedConfirm('Restart the device?','RESTART','Restart')){send({cmd:'restart',confirm:'RESTART'})}
   };
 
   window.identifyDevice=function(){
@@ -3807,15 +3824,16 @@ a:focus-visible,button:focus-visible,input:focus-visible,select:focus-visible{ou
   };
 
   window.resetHomeKit=function(){
-    if(confirm('This will remove all HomeKit pairings. You will need to re-pair in the Home app. Continue?')){
-      send({cmd:'hkReset'});
+    if(!ensureConnected()) return;
+    if(typedConfirm('This will remove all HomeKit pairings. You will need to re-pair in the Home app.','RESET','HomeKit reset')){
+      send({cmd:'hkReset',confirm:'RESET'});
     }
   };
 
   window.forgetWifi=function(){
     if(!ensureConnected()) return;
-    if(confirm('Forget the saved Wi-Fi network and restart into setup mode?\n\nHomeKit pairing and all other settings are kept.')){
-      send({cmd:'wifiForget'});
+    if(typedConfirm('Forget the saved Wi-Fi network and restart into setup mode?\n\nHomeKit pairing and all other settings are kept.','FORGET','Forget Wi-Fi')){
+      send({cmd:'wifiForget',confirm:'FORGET'});
     }
   };
 

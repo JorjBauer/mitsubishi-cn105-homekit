@@ -96,6 +96,7 @@ static uint16_t runningChipId() {
 // ══════════════════════════════════════════════════════════════════════════════
 
 esp_err_t WebUI::handleOtaUpload(httpd_req_t *req) {
+    if (!requireSameOrigin(req)) return ESP_FAIL;
     const esp_partition_t *partition = esp_ota_get_next_update_partition(NULL);
     if (!partition) {
         LOG_ERROR("No OTA partition found");
