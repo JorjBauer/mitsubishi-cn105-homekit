@@ -278,4 +278,22 @@ same(DEFAULTS.target.min, '16', 'tempSlider ships in Celsius');
   checks++;
 }
 
+// The firmware refuses restart / hkReset / wifiForget frames without their
+// typed confirm word (main/web_ws.cpp). The page must send exactly those words,
+// and must not render a missing setup code (sent only while unpaired) as text.
+{
+  const fs = require('fs');
+  const path = require('path');
+  const src = fs.readFileSync(path.join(__dirname, '..', '..', 'web', 'index.html'), 'utf8');
+  [['restart', 'RESTART'], ['hkReset', 'RESET'], ['wifiForget', 'FORGET'], ['factoryReset', 'ERASE']]
+    .forEach(function (p) {
+      assert.ok(src.includes("send({cmd:'" + p[0] + "',confirm:'" + p[1] + "'})"),
+        p[0] + ' must send confirm ' + p[1]);
+      checks++;
+    });
+  assert.ok(src.includes("hkSetupCodeEl.textContent=s.hkSetupCode||'--'"),
+    'absent setup code must render as a placeholder');
+  checks++;
+}
+
 console.log('PASS: web state handling (' + checks + ' checks)');

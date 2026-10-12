@@ -163,6 +163,22 @@ static esp_err_t handleRedirect404(httpd_req_t *req, httpd_err_code_t) {
 // WiFi status and setup handlers
 // ══════════════════════════════════════════════════════════════════════════════
 
+bool WebUI::requireSameOrigin(httpd_req_t *req) {
+    char origin[128] = "", host[128] = "";
+    size_t ol = httpd_req_get_hdr_value_len(req, "Origin");
+    if (ol == 0) return true;   // curl, native apps, same-origin without the header
+    size_t hl = httpd_req_get_hdr_value_len(req, "Host");
+    bool ok = ol < sizeof(origin) && hl < sizeof(host) &&
+              httpd_req_get_hdr_value_str(req, "Origin", origin, sizeof(origin)) == ESP_OK &&
+              (hl == 0 || httpd_req_get_hdr_value_str(req, "Host", host, sizeof(host)) == ESP_OK) &&
+              webOriginAllowed(origin, host);
+    if (!ok) {
+        LOG_WARN("Rejected cross-origin request to %s (Origin: %.60s)", req->uri, origin);
+        httpd_resp_send_err(req, HTTPD_403_FORBIDDEN, "Cross-origin request refused");
+    }
+    return ok;
+}
+
 esp_err_t WebUI::handleWifiStatus(httpd_req_t *req) {
     // Load cached SSID from NVS
     char ssid[33] = "";
@@ -198,7 +214,7 @@ esp_err_t WebUI::handleWifiStatus(httpd_req_t *req) {
         ",\"joined\":%s,\"trial\":\"%s\",\"hkSetupCode\":\"%s\"}",
         escSSID, escName, connected ? "true" : "false",
         joined ? "true" : "false", trial,
-        homekit_get_setup_code());
+        webHkSetupValue(true, homekit_get_controller_count(), homekit_get_setup_code()));
 
     httpd_resp_set_type(req, "application/json");
     httpd_resp_sendstr(req, buf);
@@ -263,6 +279,7 @@ bool WebUI::applyWifiCredentials(const char *json, const char **outError) {
 }
 
 esp_err_t WebUI::handleWifiSetup(httpd_req_t *req) {
+    if (!requireSameOrigin(req)) return ESP_FAIL;
     // Read the whole declared body (capped), never a prefix: a clipped body
     // would end inside a JSON string and connect() would get a truncated
     // password.
@@ -297,6 +314,7 @@ esp_err_t WebUI::handleWifiSetup(httpd_req_t *req) {
 }
 
 esp_err_t WebUI::handleIdentify(httpd_req_t *req) {
+    if (!requireSameOrigin(req)) return ESP_FAIL;
     status_led_identify();
     httpd_resp_set_type(req, "application/json");
     httpd_resp_sendstr(req, "{\"status\":\"ok\"}");

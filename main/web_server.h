@@ -30,6 +30,11 @@ private:
 
     void applyCaptivePortalHandler();   // (Un)install the AP-mode captive 404 handler
 
+    // 403s and returns false when the request carries a cross-site Origin
+    // (see web_security.h). Call first in the WebSocket upgrade and in every
+    // state-changing POST handler.
+    static bool requireSameOrigin(httpd_req_t *req);
+
     // ── HTTP handlers (static, access global webUI instance) ────────────────
     static esp_err_t handleRoot(httpd_req_t *req);
     static esp_err_t handleRecoveryPage(httpd_req_t *req);

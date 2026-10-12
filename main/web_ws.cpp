@@ -17,6 +17,7 @@
 #include <algorithm>
 #include <atomic>
 #include <cmath>
+#include "web_security.h"
 #include <cstdarg>
 #include "ble_config.h"
 #ifdef BLE_ENABLE
@@ -46,6 +47,9 @@ static constexpr uint32_t WS_LOG_RESUME_HEAP = 70 * 1024;
 esp_err_t WebUI::handleWebSocket(httpd_req_t *req) {
     // On first call (handshake), req->method == HTTP_GET
     if (req->method == HTTP_GET) {
+        // Cross-site WebSocket hijacking: browsers attach Origin to the
+        // upgrade, and nothing else stops a foreign page driving this socket.
+        if (!requireSameOrigin(req)) return ESP_FAIL;
         int fd = httpd_req_to_sockfd(req);
 
         // All WS writes (including SDK control frames) run on httpd. Retire
@@ -606,12 +610,22 @@ void WebUI::handleWsMessage(httpd_req_t *req, const char *msg) {
         esp_restart();
 
     } else if (strcmp(cmd, "restart") == 0) {
+        if (!webConfirmed(msg, "RESTART")) {
+            sendWsText(httpd_req_to_sockfd(req),
+                       "{\"type\":\"error\",\"msg\":\"Restart not confirmed\"}");
+            return;
+        }
         LOG_INFO("Restart requested");
         sendWsText(httpd_req_to_sockfd(req), "{\"type\":\"info\",\"msg\":\"Restarting...\"}");
         vTaskDelay(pdMS_TO_TICKS(500));
         esp_restart();
 
     } else if (strcmp(cmd, "hkReset") == 0) {
+        if (!webConfirmed(msg, "RESET")) {
+            sendWsText(httpd_req_to_sockfd(req),
+                       "{\"type\":\"error\",\"msg\":\"HomeKit reset not confirmed\"}");
+            return;
+        }
         LOG_WARN("HomeKit pairing reset requested");
         eventlog_append(EV_HK_RESET);
         if (homekit_reset_pairings()) {
@@ -624,9 +638,14 @@ void WebUI::handleWsMessage(httpd_req_t *req, const char *msg) {
 
     } else if (strcmp(cmd, "wifiForget") == 0) {
         // ── Erase stored WiFi credentials, reboot into the setup AP ──────
-        // Deliberately NOT gated by a typed confirm string. factoryReset is,
-        // because it is irreversible; this is recoverable in under a minute
-        // from the AP, so it sits with hkReset / forgetRemote / restart.
+        // Gated by a typed confirm string like factoryReset: with no LAN
+        // authentication, a single forged frame must not be able to drop the
+        // unit off the network.
+        if (!webConfirmed(msg, "FORGET")) {
+            sendWsText(httpd_req_to_sockfd(req),
+                       "{\"type\":\"error\",\"msg\":\"Wi-Fi forget not confirmed\"}");
+            return;
+        }
         LOG_WARN("WiFi credential erase requested");
         eventlog_append(EV_WIFI_CREDS_CHANGED, 1);   // code 1 = erased
         sendWsText(httpd_req_to_sockfd(req), "{\"type\":\"wifiForgotten\"}");
@@ -945,8 +964,8 @@ void WebUI::pushState() {
         (hkReady && hkControllers > 0) ? "true" : "false",
         hkControllers,
         homekit_get_status_string(),
-        hkReady ? homekit_get_setup_code() : "",
-        hkReady ? homekit_get_setup_payload() : ""
+        webHkSetupValue(hkReady, hkControllers, homekit_get_setup_code()),
+        webHkSetupValue(hkReady, hkControllers, homekit_get_setup_payload())
     );
     section();
 
