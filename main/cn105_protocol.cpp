@@ -342,6 +342,7 @@ void CN105Controller::setMode(uint8_t mode) {
 }
 
 void CN105Controller::setTargetTemp(float tempC) {
+    if (!std::isfinite(tempC)) return;
     float clamped = std::clamp(tempC, CN105_TEMP_MIN, CN105_TEMP_MAX);
     LOG_INFO("CMD: setTargetTemp(%.1f%sC)", clamped, "\xC2\xB0");
     uint32_t now = uptime_ms();
@@ -409,8 +410,8 @@ void CN105Controller::sendPendingChanges() {
 }
 
 void CN105Controller::sendRemoteTemperature(float tempC) {
-    if (std::isnan(tempC)) {
-        LOG_WARN("sendRemoteTemperature(NAN) ignored — use clearRemoteTemperature()");
+    if (!std::isfinite(tempC)) {
+        LOG_WARN("sendRemoteTemperature(non-finite) ignored — use clearRemoteTemperature() to clear");
         return;
     }
     taskENTER_CRITICAL(&_mux);

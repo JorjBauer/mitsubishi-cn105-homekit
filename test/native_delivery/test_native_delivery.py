@@ -273,7 +273,8 @@ ws = (MAIN / "web_ws.cpp").read_text()
 start = ws.index('    bool hkReady = homekit_is_started();')
 HOMEKIT += ws[start:ws.index('    section();', start)] + "\nreturn buf;}\n"
 
-SOURCES = {"cn105_polling": CN105 + PUMP, "link_source": LINK, "ble_handoff": BLE, "auto_band": AUTO,
+SOURCES = {"cn105_polling": CN105 + PUMP, "cn105_float_setters": CN105 + PUMP,
+           "link_source": LINK, "ble_handoff": BLE, "auto_band": AUTO,
            "factory_reset": FACTORY, "homekit_pairing": HOMEKIT}
 failed = False
 with tempfile.TemporaryDirectory(prefix="cn105-native-delivery-") as directory:
