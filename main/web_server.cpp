@@ -1,5 +1,6 @@
 #include "web_server.h"
 #include "json_utils.h"
+#include "web_security.h"
 #include "event_log.h"
 #include "branding.h"
 #include "wifi_manager.h"
@@ -237,8 +238,14 @@ bool WebUI::applyWifiCredentials(const char *json, const char **outError) {
         *outError = "SSID is required";
         return false;
     }
-    // Password is optional (open networks send empty password)
-    jsonGetString(json, "password", password, sizeof(password));
+    // Password is optional (open networks send empty password), but one that is
+    // present and cannot be read whole (unterminated string) must fail the
+    // request rather than join with a truncated secret.
+    if (!jsonGetString(json, "password", password, sizeof(password)) &&
+        jsonHasKey(json, "password")) {
+        *outError = "Password is malformed";
+        return false;
+    }
     LOG_INFO("Applying WiFi credentials (SSID: %s)", ssid);
     // Logs the ATTEMPT — the credentials themselves are only committed to NVS
     // by WifiManager::loop() after the trial join succeeds.
@@ -256,11 +263,25 @@ bool WebUI::applyWifiCredentials(const char *json, const char **outError) {
 }
 
 esp_err_t WebUI::handleWifiSetup(httpd_req_t *req) {
-    char body[150] = {0};
-    int received = httpd_req_recv(req, body, sizeof(body) - 1);
-    if (received <= 0) {
-        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Empty request");
+    // Read the whole declared body (capped), never a prefix: a clipped body
+    // would end inside a JSON string and connect() would get a truncated
+    // password.
+    int want = webBodyLen(req->content_len, WIFI_SETUP_MAX_BODY);
+    if (want < 0) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST,
+                            req->content_len == 0 ? "Empty request" : "Request too large");
         return ESP_FAIL;
+    }
+    char body[WIFI_SETUP_MAX_BODY + 1];
+    int received = 0, stalls = 0;
+    while (received < want) {
+        int r = httpd_req_recv(req, body + received, want - received);
+        if (r == HTTPD_SOCK_ERR_TIMEOUT && ++stalls < 3) continue;
+        if (r <= 0) {
+            httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Incomplete request");
+            return ESP_FAIL;
+        }
+        received += r;
     }
     body[received] = '\0';
 
