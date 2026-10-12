@@ -118,4 +118,25 @@ int main(int, char** argv) {
   const uint8_t stranger[6]={7,7,7,7,7,7};CHECK(queue_forget_dial(stranger));drain_forget_dials();
   CHECK(sl2_link_dial_count(&s_link)==1);CHECK(LinkSensor::readings(r)==1);
  }
+ // Forgetting the pinned dial: its reading goes at once, the pump gets one
+ // clear, and the 1 Hz reconcile repairs the dangling pin.
+ CASE("forget_pinned_dial_with_two_left_reverts_to_internal") {
+  const uint8_t third[6]={3,3,3,3,3,3};memcpy(s_link.mac[2],third,6);s_link.n=3;
+  CHECK(queue_forget_dial(a));drain_forget_dials();CHECK(sl2_link_dial_count(&s_link)==2);
+  now_ms+=1000;LinkSensor::loop(c);CHECK(!LinkSensor::isActive());
+  room_source_reconcile_catalog(now_ms);
+  CHECK(settings.get().roomSingle==ROOM_MEMBER_INTERNAL);CHECK(settings.get().roomSourceId==SL2_ROOM_SOURCE_INTERNAL_ID);
+  now_ms+=1000;LinkSensor::loop(c);CHECK(c.clears==1);CHECK(std::isnan(c.temp));
+  now_ms+=30000;LinkSensor::loop(c);room_source_reconcile_catalog(now_ms);
+  CHECK(c.clears==1);CHECK(c.sends==1);CHECK(settings.get().roomSingle==ROOM_MEMBER_INTERNAL);
+ }
+ CASE("forget_pinned_dial_with_one_left_repins_it") {
+  auto pb=reading(2200);LinkSensor::feed(b,&pb);
+  CHECK(queue_forget_dial(a));drain_forget_dials();CHECK(sl2_link_dial_count(&s_link)==1);
+  now_ms+=1000;LinkSensor::loop(c);CHECK(!LinkSensor::isActive());
+  room_source_reconcile_catalog(now_ms);
+  CHECK(settings.get().roomSingle==ROOM_MEMBER_LINK);CHECK(settings.get().roomSourceId==id(b));
+  now_ms+=1000;LinkSensor::loop(c);
+  CHECK(c.clears==1);CHECK(c.temp==22);CHECK(c.sends==2);CHECK(LinkSensor::isActive());
+ }
 }

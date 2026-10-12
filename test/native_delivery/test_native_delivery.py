@@ -184,7 +184,8 @@ static bool sl2_link_forget_dial(BondedDials* l,const uint8_t mac[6]) {
 '''
 LINK += "\n" + function((MAIN / "esp_utils.h").read_text(), "fnv1a32")
 LINK += "\n" + "\n".join(function(adapter, n) for n in
-    ["copy_name", "room_catalog_build", "room_catalog_hash", "room_catalog_revision", "h_room_source_set"])
+    ["copy_name", "room_catalog_build", "room_catalog_hash", "room_catalog_revision", "h_room_source_set",
+     "room_source_reconcile_catalog"])
 # The web forgetDial mailbox and its main-task drain, statics included.
 LINK += "\n" + adapter[adapter.index("/* Per-dial forget mailbox"):adapter.index("static void drain_forget_dials")]
 LINK += "\n" + function(adapter, "drain_forget_dials")
