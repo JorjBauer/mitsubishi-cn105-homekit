@@ -2454,7 +2454,9 @@ a:focus-visible,button:focus-visible,input:focus-visible,select:focus-visible{ou
       setHtml(dList,dials.map(linkDialRowHtml).join(''));
 
       var pairing=s.remotePairing===true;
-      $('pairRemoteBtn').style.display=(pairing||bonded)?'none':'';
+      var pairLabel=linkPairLabel(s),pairBtn=$('pairRemoteBtn');
+      pairBtn.style.display=pairLabel?'':'none';
+      if(pairLabel)pairBtn.textContent=pairLabel;
       $('cancelPairBtn').style.display=pairing?'':'none';
       $('forgetRemoteBtn').style.display=bonded?'':'none';
       // With the per-dial list showing, the card's own button is forget-all.
@@ -2520,6 +2522,16 @@ a:focus-visible,button:focus-visible,input:focus-visible,select:focus-visible{ou
       '<span class="status-label">'+escHtml(st)+'</span>'+
       '<span class="item-val mono">'+escHtml(d.mac)+'</span></div>'+
       '<button type="button" class="btn-danger grow0" data-mac="'+escHtml(d.mac)+'">Forget</button></div>';
+  }
+  var LINK_MAX_DIALS=4;   // SL2_MAX_DIALS (main/sl2_bond.h); test/web_link_dials pins it
+  // The Pair button's label, or null to hide it: always before the first
+  // dial, then while the bond table has room. Hidden while a window is open,
+  // and when the dial count is missing from the frame.
+  function linkPairLabel(s){
+    if(s.remotePairing===true)return null;
+    if(s.remoteBonded!==true)return 'Pair';
+    var n=Array.isArray(s.remoteDials)?s.remoteDials.length:LINK_MAX_DIALS;
+    return n<LINK_MAX_DIALS?'Pair another Link':null;
   }
   // One dial only, no restart (forgetRemote is the forget-all path).
   function forgetDialCmd(mac){return {cmd:'forgetDial',mac:mac}}

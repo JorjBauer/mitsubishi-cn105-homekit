@@ -10,6 +10,7 @@ const vm = require('vm');
 const ROOT = path.join(__dirname, '..', '..');
 const html = fs.readFileSync(path.join(ROOT, 'web', 'index.html'), 'utf8');
 const ws = fs.readFileSync(path.join(ROOT, 'main', 'web_ws.cpp'), 'utf8');
+const bond = fs.readFileSync(path.join(ROOT, 'main', 'sl2_bond.h'), 'utf8');
 
 function block(name) {
   const start = `// ── ${name}:start`, end = `// ── ${name}:end`;
@@ -25,7 +26,8 @@ const ui = vm.runInThisContext(
   '  function fmtReadingTemp(c){return c.toFixed(1)}\n' +
   '  function fmtAgo(s){return s+"s ago"}\n' +
   esc[0] + '\n' + block('linkDials') + '\n' +
-  '  return {linkDialList:linkDialList,linkDialRowHtml:linkDialRowHtml,forgetDialCmd:forgetDialCmd};\n' +
+  '  return {linkDialList:linkDialList,linkDialRowHtml:linkDialRowHtml,forgetDialCmd:forgetDialCmd,\n' +
+  '          linkPairLabel:linkPairLabel,LINK_MAX_DIALS:LINK_MAX_DIALS};\n' +
   '})')();
 
 let checks = 0;
@@ -56,6 +58,25 @@ const C = { mac: 'AA:BB:CC:DD:EE:03', live: false, seen: -1, t: null };
 same(ui.linkDialList({ remoteBonded: true, remoteDials: [A] }), [], 'one dial, no list');
 same(ui.linkDialList({ remoteBonded: true }), [], 'missing field, no list');
 same(ui.linkDialList({ remoteBonded: false, remoteDials: [A, B] }), [], 'unpaired, no list');
+
+// Pair: offered before the first dial and, as "Pair another Link", while the
+// bond table has room; hidden while a window is open or the table is full.
+{
+  const bondMax = /#define SL2_MAX_DIALS (\d+)/.exec(bond);
+  ok(bondMax, 'SL2_MAX_DIALS defined in main/sl2_bond.h');
+  same(ui.LINK_MAX_DIALS, Number(bondMax[1]), 'the UI table size is the firmware table size');
+  const dials = (n) => [A, B, C, A].slice(0, n);
+  same(ui.linkPairLabel({ remoteBonded: false, remoteDials: [] }), 'Pair', 'unpaired: Pair');
+  same(ui.linkPairLabel({ remoteBonded: false, remotePairing: true }), null, 'listening: no Pair');
+  for (let n = 1; n < ui.LINK_MAX_DIALS; n++)
+    same(ui.linkPairLabel({ remoteBonded: true, remoteDials: dials(n) }), 'Pair another Link',
+         n + ' paired: Pair another Link');
+  same(ui.linkPairLabel({ remoteBonded: true, remoteDials: dials(ui.LINK_MAX_DIALS) }), null,
+       'table full: no Pair');
+  same(ui.linkPairLabel({ remoteBonded: true, remoteDials: dials(1), remotePairing: true }), null,
+       'listening while paired: no Pair');
+  same(ui.linkPairLabel({ remoteBonded: true }), null, 'dial count unknown: no Pair');
+}
 
 // Markup in a MAC cannot reach the DOM.
 {

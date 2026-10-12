@@ -332,7 +332,9 @@ The unit-side implementation lives in this repository; the dial's own firmware i
 
 <img src="media/serinlink.png" width=300>
 
-**Pairing.** Open a 60-second pairing window on the unit, using either the **Pair** button on the Link card or a 2–7 second hold of the unit's button, then start pairing from the dial. Pairing is Ed25519-signed trust-on-first-use, and one unit can hold up to **4** paired dials. *Forget* on the Link card clears a bond; so does the same 2–7 second button hold when a dial is already paired.
+**Pairing.** Open a 60-second pairing window on the unit, using either the **Pair** button on the Link card or a 2–7 second hold of the unit's button, then start pairing from the dial. Pairing is Ed25519-signed trust-on-first-use, and one unit can hold up to **4** paired dials. To add another dial, use **Pair another Link** on the Link card, which shows while fewer than 4 are paired. The button hold opens pairing only when no dial is paired.
+
+**Forgetting a dial.** With one dial paired, *Forget* on the Link card clears its bond and restarts the unit. With two or more, the card lists each dial with its own *Forget*, which removes only that dial and needs no restart, and *Forget All* clears every bond and restarts. The 2–7 second button hold also forgets every paired dial when at least one is paired.
 
 **What the link carries.** Beyond control, a paired dial can act as the [room temperature source](#room-temperature), forward humidity, report its own telemetry (model, firmware, signal, last seen) to the Link card, and push new WiFi credentials to the unit if it has fallen off the network. Replayed packets are rejected across a controller reboot, and modes your unit doesn't support are masked out on the dial the same way they are in Apple Home.
 
@@ -375,7 +377,7 @@ The page is organised into cards:
 - **Room Sensor** — single or averaged room temperature sources, BLE sensor list, readings, offsets, stale timeout (see [Room Temperature](#room-temperature))
 - **Network · Wi-Fi** — current network and uptime, a scan list of nearby networks, credential entry with trial-before-save, and *Forget Wi-Fi…* under **Advanced**
 - **HomeKit** — pairing status, controller count, setup code with copy button, QR code, and reset pairing
-- **Link** — paired dial model, firmware, signal, last seen; pair, cancel, and forget (see [Serin Link](#serin-link))
+- **Link** — paired dial model, firmware, signal, last seen; pair, *Pair another Link*, and cancel; a per-dial *Forget* plus *Forget All* once two or more dials are paired (see [Serin Link](#serin-link))
 - **Device** — device name, °C/°F, vane type, Unit Capabilities (which HVAC modes your unit actually has), log level, and settings export/import; poll interval, CN105 baud rate, and factory reset sit behind an **Advanced** disclosure
 - **Firmware** — installed version, Check for Updates, manual `.bin` upload, **Flash LED** to identify the device, and Restart (see [OTA Updates](#ota-updates))
 - **About** — board, firmware, IP, mDNS name, MAC, last reset reason, boot and crash counts, free and lowest-ever heap, WiFi and heat-pump drop counters, a persistent device event log, one-tap **Copy Diagnostics** for support, and the safe-mode banner
