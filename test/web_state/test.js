@@ -296,6 +296,69 @@ same(DEFAULTS.target.min, '16', 'tempSlider ships in Celsius');
   checks++;
 }
 
+// Forget-all removes every bond and restarts, so an accidental confirmation
+// must not send it. Exercise the shipped typed prompt and click handlers;
+// single-dial forget still uses the plain browser confirmation.
+{
+  const fs = require('fs');
+  const path = require('path');
+  const vm = require('vm');
+  const src = fs.readFileSync(path.join(__dirname, '..', '..', 'web', 'index.html'), 'utf8');
+  const typed = src.slice(src.indexOf('  function typedConfirm('), src.indexOf('  window.factoryReset='));
+  const handlers = src.slice(src.indexOf("  document.getElementById('forgetRemoteBtn').addEventListener"),
+    src.indexOf("  document.getElementById('pairRemoteBtn').addEventListener"));
+  const dialCmd = src.match(/function forgetDialCmd\(mac\)\{[^\n]*\}/)[0];
+  const create = vm.runInThisContext('(function(answer,count){\n' +
+    'var sent=[],prompts=[],confirms=[],callbacks={},remoteDialCount=count;\n' +
+    'function prompt(msg){prompts.push(msg);return answer}\n' +
+    'function confirm(msg){confirms.push(msg);return true}\n' +
+    'function showToast(){}\n' +
+    'function send(msg){sent.push(msg)}\n' +
+    'var document={getElementById:function(id){return {addEventListener:function(type,cb){callbacks[id]=cb}}}};\n' +
+    typed + dialCmd + '\n' + handlers + '\n' +
+    'return {sent:sent,prompts:prompts,confirms:confirms,callbacks:callbacks};})',
+    { filename: 'web/index.html#forget-commands' });
+
+  for (const count of [0, 3]) {
+    for (const answer of [null, '', 'RESET', 'FORGETTING']) {
+      const ui = create(answer, count);
+      ui.callbacks.forgetRemoteBtn();
+      same(ui.sent, [], 'forget-all sends nothing for cancelled or incorrect typed input');
+      assert.strictEqual(ui.prompts.length, 1, 'forget-all asks for a typed word');
+      assert.ok(ui.prompts[0].includes('Type FORGET to confirm:'), 'forget-all prompt asks for FORGET');
+      assert.ok(/restart/.test(ui.prompts[0]), 'forget-all prompt explains the restart');
+      same(ui.confirms, [], 'forget-all uses the typed prompt');
+      checks += 3;
+    }
+    for (const answer of ['FORGET', ' forget ']) {
+      const ui = create(answer, count);
+      ui.callbacks.forgetRemoteBtn();
+      same(ui.sent, [{ cmd: 'forgetRemote', confirm: 'FORGET' }],
+        'forget-all sends the exact confirm word after typed confirmation');
+    }
+  }
+
+  const one = create(null, 3);
+  one.callbacks.remoteDialList({ target: { closest: function () {
+    return { getAttribute: function () { return 'AA:BB:CC:DD:EE:FF'; } };
+  } } });
+  same(one.sent, [{ cmd: 'forgetDial', mac: 'AA:BB:CC:DD:EE:FF' }], 'single-dial forget sends only its MAC');
+  same(one.prompts, [], 'single-dial forget needs no typed word');
+  assert.strictEqual(one.confirms.length, 1, 'single-dial forget keeps plain browser confirm');
+  checks++;
+
+  // Pin the server guard before the destructive call, consistent with the
+  // existing firmware source checks in this suite.
+  const ws = fs.readFileSync(path.join(__dirname, '..', '..', 'main', 'web_ws.cpp'), 'utf8');
+  const begin = ws.indexOf('} else if (strcmp(cmd, "forgetRemote") == 0) {');
+  const branch = ws.slice(begin, ws.indexOf('} else if (strcmp(cmd, "forgetDial")', begin));
+  assert.ok(/if\s*\(!webConfirmed\(msg, "FORGET"\)\)\s*\{[\s\S]*?sendWsText\([\s\S]*?return;\s*\}/.test(branch),
+    'forgetRemote must reject frames without exact FORGET confirmation');
+  assert.ok(branch.indexOf('webConfirmed') < branch.indexOf('espnow_forget_and_restart()'),
+    'forgetRemote must check confirmation before removing bonds and restarting');
+  checks += 2;
+}
+
 // Once paired the firmware sends no setup code or URI, so the page must not
 // offer a Show Setup Code control, must say why, and must clear a QR drawn
 // before the pairing.

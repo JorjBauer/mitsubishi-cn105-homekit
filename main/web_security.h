@@ -74,8 +74,8 @@ inline int webBodyLen(size_t contentLen, size_t cap) {
 }
 
 // True when the command frame carries "confirm":"<word>" exactly. Destructive
-// commands (factoryReset, hkReset, wifiForget, restart) require it so a stray
-// or forged frame cannot trigger them on its own.
+// commands (factoryReset, hkReset, wifiForget, forgetRemote, restart) require
+// it so a stray or forged frame cannot trigger them on its own.
 inline bool webConfirmed(const char *msg, const char *word) {
     char given[16] = {0};
     return jsonGetString(msg, "confirm", given, sizeof(given)) && strcmp(given, word) == 0;

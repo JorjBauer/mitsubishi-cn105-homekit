@@ -660,6 +660,11 @@ void WebUI::handleWsMessage(httpd_req_t *req, const char *msg) {
         esp_restart();
 
     } else if (strcmp(cmd, "forgetRemote") == 0) {
+        if (!webConfirmed(msg, "FORGET")) {
+            sendWsText(httpd_req_to_sockfd(req),
+                       "{\"type\":\"error\",\"msg\":\"Remote forget not confirmed\"}");
+            return;
+        }
         LOG_WARN("ESP-NOW remote forget requested");
         sendWsText(httpd_req_to_sockfd(req), "{\"type\":\"info\",\"msg\":\"Forgetting remote...\"}");
         espnow_forget_and_restart();
