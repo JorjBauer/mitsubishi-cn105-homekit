@@ -469,19 +469,7 @@ bool BleSensor::isBleEnabled() {
     return s_bleEnabled.load();
 }
 
-void BleSensor::loop(CN105Controller &cn105) {
-    // NimBLE follows the enable toggle (flipped from the httpd task): bring the
-    // stack up or tear it down here, then let the restart drain below own the
-    // scan start. Reading s_bleEnabled at drain time makes a rapid toggle
-    // converge on the final state.
-    if (s_pendingSync.exchange(false)) {
-        if (s_bleEnabled.load()) {
-            if (initNimble()) s_pendingRestart.store(true);
-        } else {
-            deinitNimble();
-        }
-    }
-
+static void drainPendingClear(CN105Controller &cn105) {
     // Deferred clearRemoteTemperature — kept pending until the CN105 link can
     // actually carry it, so a clear issued while disconnected isn't lost.
     // Skip it if the dial's own sensor has since become the selected AND
@@ -502,8 +490,25 @@ void BleSensor::loop(CN105Controller &cn105) {
         }
         s_pendingClear.store(false);
     }
+}
 
-    if (!s_bleEnabled.load()) return;
+void BleSensor::loop(CN105Controller &cn105) {
+    // NimBLE follows the enable toggle (flipped from the httpd task): bring the
+    // stack up or tear it down here, then let the restart drain below own the
+    // scan start. Reading s_bleEnabled at drain time makes a rapid toggle
+    // converge on the final state.
+    if (s_pendingSync.exchange(false)) {
+        if (s_bleEnabled.load()) {
+            if (initNimble()) s_pendingRestart.store(true);
+        } else {
+            deinitNimble();
+        }
+    }
+
+    if (!s_bleEnabled.load()) {
+        drainPendingClear(cn105);
+        return;
+    }
 
     uint32_t now = uptime_ms();
     int  slot = feedSlot();
@@ -547,7 +552,10 @@ void BleSensor::loop(CN105Controller &cn105) {
         s_prevFeedSlot  = slot;
         s_lastKeepalive = 0;
         s_lastSentTemp  = NAN;
-        if (!feed) s_pendingClear.store(true);
+        s_staleReverted.store(false);
+        // A configured replacement with no usable sample cannot inherit the
+        // old slot's remote-temperature override indefinitely.
+        if (!feed || !active || std::isnan(temp)) s_pendingClear.store(true);
     }
 
     if (feed && active && cn105.isConnected() && !std::isnan(temp)) {
@@ -565,7 +573,10 @@ void BleSensor::loop(CN105Controller &cn105) {
                        CN105Controller::quantizeRemoteTemp(feedTemp) !=
                        CN105Controller::quantizeRemoteTemp(s_lastSentTemp);
         uint32_t interval = changed ? BLE_RESEND_MIN_MS : BLE_KEEPALIVE_MS;
-        if (now - s_lastKeepalive >= interval) {
+        if (std::isnan(s_lastSentTemp) || now - s_lastKeepalive >= interval) {
+            // Recovery supersedes a clear queued while CN105 was down.
+            s_pendingClear.store(false);
+            s_staleReverted.store(false);
             cn105.sendRemoteTemperature(feedTemp);
             s_lastKeepalive = now;
             s_lastSentTemp  = feedTemp;
@@ -573,13 +584,16 @@ void BleSensor::loop(CN105Controller &cn105) {
     }
 
     // Stale watchdog — routes the revert through the s_pendingClear mailbox
-    // above, which owns the send, the retry-until-connected, and the
+    // drained below, which owns the send, the retry-until-connected, and the
     // s_lastSentTemp reset
     if (feed && stale && !s_staleReverted.exchange(true)) {
         s_pendingClear.store(true);
         LOG_WARN("Sensor stale (%lus no data) — reverting to internal thermistor",
                  (unsigned long)((now - lastUpd) / 1000));
     }
+    // Decide replacement/recovery first so a pending clear cannot overwrite
+    // the fresh sample sent in this pass.
+    drainPendingClear(cn105);
 }
 
 static bool slotIdxOk(int idx) { return idx >= 0 && idx < ROOM_MAX_BLE_SENSORS; }

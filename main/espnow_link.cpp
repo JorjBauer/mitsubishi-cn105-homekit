@@ -15,6 +15,7 @@
 
 #if ESPNOW_REMOTE_ENABLE
 
+#include <algorithm>
 #include <cstring>
 #include <cstdio>
 #include <cmath>
@@ -266,13 +267,17 @@ static uint8_t mode_to_sl2(bool power, uint8_t cn) {
         case CN105_MODE_DRY:  return SL2_MODE_DRY;
         case CN105_MODE_COOL: return SL2_MODE_COOL;
         case CN105_MODE_FAN:  return SL2_MODE_FAN_ONLY;
-        case CN105_MODE_AUTO: return SL2_MODE_AUTO;
+        case CN105_MODE_AUTO: return SL2_MODE_HEAT_COOL;
         default:              return SL2_MODE_AUTO;
     }
 }
 
 static uint8_t mode_from_sl2(uint8_t m) {
     switch (m) {
+        // Older dials can still request vendor AUTO; STATE/CAPS describe
+        // the persisted dual-threshold control as HEAT_COOL.
+        case SL2_MODE_HEAT_COOL:
+        case SL2_MODE_AUTO:     return CN105_MODE_AUTO;
         case SL2_MODE_HEAT:     return CN105_MODE_HEAT;
         case SL2_MODE_DRY:      return CN105_MODE_DRY;
         case SL2_MODE_COOL:     return CN105_MODE_COOL;
@@ -280,6 +285,8 @@ static uint8_t mode_from_sl2(uint8_t m) {
         default:                return CN105_MODE_AUTO;
     }
 }
+
+static constexpr float AUTO_BAND_MIN_GAP_C = 2.0f; // controller UI threshold rule
 
 /* fan detents: step i of 5 <-> canonical percent round(i*100/5) */
 static uint8_t fan_to_pct(uint8_t cn) {
@@ -383,8 +390,9 @@ static bool h_get_state(void *, sl2_hvac_state_t *out) {
     out->fault  = (st.errorCode == 0x80) ? 0 : st.errorCode;
     out->room_dc = sl2_c_to_dc(st.roomTemp);
     out->set_dc  = sl2_c_to_dc(st.targetTemp);
-    out->set_low_dc  = SL2_DC_NA;
-    out->set_high_dc = SL2_DC_NA;
+    const bool autoBand = st.power && st.mode == CN105_MODE_AUTO;
+    out->set_low_dc  = autoBand ? sl2_c_to_dc(cfg.heatingThreshold) : SL2_DC_NA;
+    out->set_high_dc = autoBand ? sl2_c_to_dc(cfg.coolingThreshold) : SL2_DC_NA;
     out->room_hum_pct = SL2_HUM_NA;
     out->hum_set_pct  = SL2_HUM_NA;
     /* Sun gate: pure function of the SNTP clock + configured location, but
@@ -476,6 +484,21 @@ static bool h_get_state(void *, sl2_hvac_state_t *out) {
 }
 
 static bool h_apply(void *, uint16_t mask, const struct sl2_cmd_pkt *cmd) {
+    // Validate temperature semantics against the mode this batch will leave
+    // active, before staging any changes. A stale dial's single AUTO target
+    // must not appear accepted and then be overwritten by the Auto engine.
+    uint8_t effectiveMode = s_ctrl->getEffectiveState().mode;
+    if ((mask & SL2_CM_MODE) && cmd->mode != SL2_MODE_OFF &&
+        mode_mask_allows(settings.get().modeMask, mode_from_sl2(cmd->mode)))
+        effectiveMode = mode_from_sl2(cmd->mode);
+    const bool bandEdit = (mask & SL2_CM_TEMP_BAND) != 0;
+    if (bandEdit && (effectiveMode != CN105_MODE_AUTO ||
+                    !mode_mask_allows(settings.get().modeMask, CN105_MODE_AUTO) ||
+                    cmd->set_low_dc == SL2_DC_NA || cmd->set_high_dc == SL2_DC_NA))
+        return false;
+    if ((mask & SL2_CM_TEMP) && effectiveMode == CN105_MODE_AUTO && !bandEdit)
+        return false;
+
     if (mask & SL2_CM_MODE) {
         if (cmd->mode == SL2_MODE_OFF) {
             s_ctrl->setPower(false);
@@ -490,7 +513,25 @@ static bool h_apply(void *, uint16_t mask, const struct sl2_cmd_pkt *cmd) {
             }
         }
     }
-    if (mask & SL2_CM_TEMP)  s_ctrl->setTargetTemp(sl2_dc_to_c(cmd->set_dc));
+    if (bandEdit) {
+        float heat = std::clamp(roundf(sl2_dc_to_c(cmd->set_low_dc) * 2.0f) / 2.0f,
+                                CN105_TEMP_MIN, CN105_TEMP_MAX);
+        float cool = std::clamp(roundf(sl2_dc_to_c(cmd->set_high_dc) * 2.0f) / 2.0f,
+                                CN105_TEMP_MIN, CN105_TEMP_MAX);
+        // Both limits were supplied: as in the web UI, the cooling limit
+        // wins a too-narrow band, unless the heating limit hits the floor.
+        if (cool - heat < AUTO_BAND_MIN_GAP_C) {
+            heat = std::max(CN105_TEMP_MIN, cool - AUTO_BAND_MIN_GAP_C);
+            cool = heat + AUTO_BAND_MIN_GAP_C;
+        }
+        if (settings.get().heatingThreshold != heat || settings.get().coolingThreshold != cool) {
+            settings.get().heatingThreshold = heat;
+            settings.get().coolingThreshold = cool;
+            settings.save();
+        }
+    } else if (mask & SL2_CM_TEMP) {
+        s_ctrl->setTargetTemp(sl2_dc_to_c(cmd->set_dc));
+    }
     if (mask & SL2_CM_FAN)   s_ctrl->setFanSpeed(fan_from_pct(cmd->fan));
     if (mask & SL2_CM_VANEV) s_ctrl->setVane(vanev_from_sl2(cmd->vane_v));
     if (mask & SL2_CM_VANEH) s_ctrl->setWideVane(vaneh_from_sl2(cmd->vane_h));
@@ -505,7 +546,7 @@ static bool h_apply(void *, uint16_t mask, const struct sl2_cmd_pkt *cmd) {
         settings.save();
         LOG_INFO("Dial set display units: %s", cmd->use_f ? "F" : "C");
     }
-    /* TEMP_BAND / PRESET / HUM: not declared in this controller's CAPS. */
+    /* PRESET / HUM: not declared in this controller's CAPS. */
     return true;
 }
 
@@ -578,7 +619,7 @@ static bool h_get_caps(void *, struct sl2_caps_pkt *out) {
     out->set_max_dc = sl2_c_to_dc(CN105_TEMP_MAX);
     out->set_step_dc = 5;                   // 0.5 °C, the CN105 enhanced-mode step
     out->ftab_id = 1;                       // Mitsubishi 61-88F table
-    out->band_min_gap_dc = 0;
+    out->band_min_gap_dc = sl2_c_to_dc(AUTO_BAND_MIN_GAP_C);
     out->hum_step_pct = 0;
     uint16_t feat = SL2_FEAT_WIFI_INFO | SL2_FEAT_HOMEKIT | SL2_FEAT_OUTSIDE_T |
                     SL2_FEAT_COMPRESSOR | SL2_FEAT_FW_INFO | SL2_FEAT_RUNTIME |
