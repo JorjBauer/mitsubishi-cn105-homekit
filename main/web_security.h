@@ -15,27 +15,68 @@
 // someone has paired. They do not stop a direct client on the LAN.
 // ════════════════════════════════════════════════════════════════════════════
 
-// Host part of "host", "host:port", "[v6]" or "[v6]:port" (no scheme, no path).
-// Copies into out; returns false if it is empty or does not fit.
-inline bool webHostOnly(const char *authority, size_t len, char *out, size_t outLen) {
-    if (len == 0) return false;
+// Parse "host[:port]" or "[v6][:port]", rejecting malformed authorities.
+// A missing port is reported as zero; explicit ports must be in 1..65535.
+inline bool webHostOnly(const char *authority, size_t len, char *out, size_t outLen,
+                        unsigned *port = nullptr) {
+    if (!authority || len == 0) return false;
     size_t n = len;
     if (authority[0] == '[') {
         const char *close = (const char *)memchr(authority, ']', len);
         if (!close) return false;
         n = (size_t)(close - authority) + 1;
+        if (n < 4) return false;
+        for (size_t i = 1; i + 1 < n; ++i) {
+            char c = authority[i];
+            if (!((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') ||
+                  (c >= 'A' && c <= 'F') || c == ':' || c == '.')) return false;
+        }
     } else {
         const char *colon = (const char *)memchr(authority, ':', len);
         if (colon) n = (size_t)(colon - authority);
+        for (size_t i = 0; i < n; ++i) {
+            char c = authority[i];
+            if (!((c >= '0' && c <= '9') || (c >= 'a' && c <= 'z') ||
+                  (c >= 'A' && c <= 'Z') || c == '-' || c == '.')) return false;
+        }
+    }
+    unsigned parsedPort = 0;
+    if (n < len) {
+        if (authority[n] != ':' || n + 1 == len) return false;
+        for (size_t i = n + 1; i < len; ++i) {
+            if (authority[i] < '0' || authority[i] > '9') return false;
+            parsedPort = parsedPort * 10 + (unsigned)(authority[i] - '0');
+            if (parsedPort > 65535) return false;
+        }
+        if (parsedPort == 0) return false;
     }
     if (n == 0 || n + 1 > outLen) return false;
     memcpy(out, authority, n);
     out[n] = '\0';
+    if (port) *port = parsedPort;
     return true;
 }
 
-// True when a request may change device state. No Origin header (curl, native
-// apps, same-origin GET upgrades from some clients) is allowed. Otherwise the
+// DNS rebinding guard for every HTTP request, including requests without
+// Origin. HTTP serves port 80. Only the current STA IP, configured mDNS hostname
+// (bare or .local), and the default recovery AP IP may address this server.
+inline bool webHostAllowed(const char *host, const char *staIP, const char *mdnsHostname) {
+    char name[96];
+    unsigned port;
+    if (!host || !webHostOnly(host, strlen(host), name, sizeof(name), &port) ||
+        (port != 0 && port != 80)) return false;
+    if (strcmp(name, "192.168.4.1") == 0) return true;
+    if (staIP && staIP[0] && strcmp(staIP, "0.0.0.0") != 0 && strcmp(name, staIP) == 0)
+        return true;
+    if (!mdnsHostname || !mdnsHostname[0]) return false;
+    if (strcasecmp(name, mdnsHostname) == 0) return true;
+    size_t n = strlen(mdnsHostname);
+    return strlen(name) == n + 6 && strncasecmp(name, mdnsHostname, n) == 0 &&
+           strcasecmp(name + n, ".local") == 0;
+}
+
+// Additional same-host Origin rule, after the Host allowlist passes. No Origin
+// header (curl, native apps, some same-origin requests) is allowed. Otherwise the
 // Origin must be http(s)://<host>[:port] where <host> equals the host in the
 // request's Host header, compared case-insensitively. "null" and any other
 // scheme are rejected.

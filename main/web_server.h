@@ -28,24 +28,24 @@ private:
     std::atomic<bool> _wsReady{false}; // close_fn may run during server startup
     static void closeClient(httpd_handle_t server, int fd);
 
-    void applyCaptivePortalHandler();   // (Un)install the AP-mode captive 404 handler
+    void applyCaptivePortalHandler();   // Install guarded 404 handler; AP flag controls CNA
 
-    // Sends a 403 and returns false when the request carries a cross-site
-    // Origin (see web_security.h). Call first in every state-changing POST
-    // handler; the WebSocket upgrade runs it from wsPreHandshake, before the
-    // 101 response. Does not stop DNS rebinding (that needs a Host allowlist).
+    // Sends a 403 and returns false for a foreign/malformed Host or cross-site
+    // Origin (see web_security.h). Call first in every HTTP handler; WebSocket
+    // upgrades run it from wsPreHandshake before the 101 response.
     static bool requireSameOrigin(httpd_req_t *req);
 
     // ── HTTP handlers (static, access global webUI instance) ────────────────
     static esp_err_t handleRoot(httpd_req_t *req);
     static esp_err_t handleRecoveryPage(httpd_req_t *req);
+    static esp_err_t handleRedirect404(httpd_req_t *req, httpd_err_code_t error);
     static esp_err_t handleWifiStatus(httpd_req_t *req);
     static esp_err_t handleWifiSetup(httpd_req_t *req);
     static esp_err_t handleWifiScan(httpd_req_t *req);
     static esp_err_t handleIdentify(httpd_req_t *req);
     static esp_err_t handleOtaUpload(httpd_req_t *req);
     static esp_err_t handleWebSocket(httpd_req_t *req);
-    static esp_err_t wsPreHandshake(httpd_req_t *req);   // Origin check before the 101
+    static esp_err_t wsPreHandshake(httpd_req_t *req);   // Host/Origin check before the 101
     static esp_err_t handleManifest(httpd_req_t *req);
     static esp_err_t handleIcon192(httpd_req_t *req);
     static esp_err_t handleIcon512(httpd_req_t *req);
