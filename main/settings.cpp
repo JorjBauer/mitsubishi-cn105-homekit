@@ -3,6 +3,7 @@
 #include "sl2_proto.h"
 
 #include <algorithm>
+#include <cmath>
 #include <cstring>
 
 static const char *TAG = "settings";
@@ -191,7 +192,8 @@ void SettingsStore::begin() {
     {
         float val = 20.0f;
         size_t len = sizeof(val);
-        if (nvs_get_blob(_handle, "heatThresh", &val, &len) == ESP_OK && len == sizeof(float)) {
+        if (nvs_get_blob(_handle, "heatThresh", &val, &len) == ESP_OK && len == sizeof(float) &&
+            std::isfinite(val)) {
             // Clamp: firmware <= 0.2.4 allowed 31.0, above today's HAP char max
             // (30.5) — an out-of-range value makes hap_char_update_val reject
             // every threshold sync.
@@ -203,7 +205,8 @@ void SettingsStore::begin() {
     {
         float val = 25.0f;
         size_t len = sizeof(val);
-        if (nvs_get_blob(_handle, "coolThresh", &val, &len) == ESP_OK && len == sizeof(float)) {
+        if (nvs_get_blob(_handle, "coolThresh", &val, &len) == ESP_OK && len == sizeof(float) &&
+            std::isfinite(val)) {
             _settings.coolingThreshold = std::clamp(val, CN105_TEMP_MIN, CN105_TEMP_MAX);
         }
     }

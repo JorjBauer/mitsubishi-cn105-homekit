@@ -176,7 +176,7 @@ void WebUI::handleWsMessage(httpd_req_t *req, const char *msg) {
         }
 
         float floatVal;
-        if (jsonGetFloat(msg, "target", &floatVal)) {
+        if (jsonGetFloat(msg, "target", &floatVal) && std::isfinite(floatVal)) {
             LOG_INFO("Set target=%.1f", floatVal);
             _ctrl->setTargetTemp(floatVal);
             hasControlChange = true;
@@ -209,13 +209,13 @@ void WebUI::handleWsMessage(httpd_req_t *req, const char *msg) {
 
         float heatT, coolT;
         bool heatSet = false, coolSet = false;
-        if (jsonGetFloat(msg, "heatThresh", &heatT)) {
+        if (jsonGetFloat(msg, "heatThresh", &heatT) && std::isfinite(heatT)) {
             heatT = std::clamp(heatT, CN105_TEMP_MIN, CN105_TEMP_MAX);
             settings.get().heatingThreshold = heatT;
             heatSet = true;
             LOG_INFO("Set heatingThreshold=%.1f", heatT);
         }
-        if (jsonGetFloat(msg, "coolThresh", &coolT)) {
+        if (jsonGetFloat(msg, "coolThresh", &coolT) && std::isfinite(coolT)) {
             coolT = std::clamp(coolT, CN105_TEMP_MIN, CN105_TEMP_MAX);
             settings.get().coolingThreshold = coolT;
             coolSet = true;
