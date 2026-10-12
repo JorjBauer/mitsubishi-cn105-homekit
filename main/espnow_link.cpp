@@ -1280,6 +1280,7 @@ void EspnowLink::loop() {
     snapshot_status();
 }
 
+bool EspnowLink::isStarted() const { return s_started; }
 bool EspnowLink::isBonded() const { return s_stat.bonded; }
 bool EspnowLink::isPeerLive() const { return s_stat.live; }
 void EspnowLink::getPeerMac(uint8_t out[6]) const { memcpy(out, s_stat.mac0, 6); }
@@ -1396,6 +1397,7 @@ void espnow_register_console(void) {
 EspnowLink espnowLink;
 void EspnowLink::begin(CN105Controller *) {}
 void EspnowLink::loop() {}
+bool EspnowLink::isStarted() const { return false; }
 bool EspnowLink::isBonded() const { return false; }
 bool EspnowLink::isPeerLive() const { return false; }
 void EspnowLink::getPeerMac(uint8_t out[6]) const { for (int i = 0; i < 6; i++) out[i] = 0; }

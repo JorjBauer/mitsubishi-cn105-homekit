@@ -44,6 +44,7 @@ class EspnowLink {
 public:
     void begin(CN105Controller *ctrl);   // call AFTER WiFi started + esp_now usable
     void loop();                         // call from main loop (~every 10ms ok)
+    bool isStarted() const;              // begin() brought the link up
     bool isBonded() const;               // >=1 dial in the bond table
     bool isPeerLive() const;             // any bonded dial probed recently
     void getPeerMac(uint8_t out[6]) const;   // first bonded dial (00.. if none)

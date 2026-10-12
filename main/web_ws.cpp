@@ -670,6 +670,11 @@ void WebUI::handleWsMessage(httpd_req_t *req, const char *msg) {
         // instead of being truncated into one.
         char macStr[24] = "";
         uint8_t mac[6];
+        if (!espnowLink.isStarted()) {
+            sendWsText(httpd_req_to_sockfd(req),
+                       "{\"type\":\"error\",\"msg\":\"Serin Link is not running on this unit\"}");
+            return;
+        }
         if (!jsonGetString(msg, "mac", macStr, sizeof(macStr)) ||
             !mac_from_str(macStr, mac) || !espnowLink.forgetDial(mac)) {
             sendWsText(httpd_req_to_sockfd(req),
@@ -762,11 +767,12 @@ void WebUI::pushState() {
     // (dstLen - 2): header 475 (31-char deviceName + 32-char SSID, both fully
     // escaped, plus roomMembers) + 58 outsideTemp/errorCode/runtime
     // + 183 heap/health + 44 thresholds + 108 night gate + 387 remote/dial
-    // (escaped model + fw) + 327 config + HomeKit (setup code + URI) + 195
-    // room/Link + 215 blend + roomOffs + 278 legacy BLE + 928 for four
-    // bleSensors[] entries with 48-char escaped names + 1 closing brace
-    // = 3199 B. 4096 keeps ~28% for fields added later; overflow past that
-    // degrades (see the sections below).
+    // (escaped model + fw) + 304 remoteDials (four bonded dials) + 327
+    // config + HomeKit (setup code + URI) + 195 room/Link + 215 blend +
+    // roomOffs + 278 legacy BLE + 928 for four bleSensors[] entries with
+    // 48-char escaped names + 1 closing brace = 3503 B. 4096 keeps ~14% for
+    // fields added later; overflow past that degrades (see the sections
+    // below).
     constexpr size_t bufSz = 4096;
     // Tail the sections can never eat, so the closing brace (and the
     // truncation marker) always fit however full the body ran.
@@ -931,7 +937,9 @@ void WebUI::pushState() {
             espnowLink.pairResult());
 
         // Every bonded dial, for the card's per-dial Forget list; t is that
-        // dial's own fresh reading. Worst case 4 x 72 B + 17 B framing.
+        // dial's own fresh reading. Worst case 304 B: 17 B framing + 71 B for
+        // the first entry + 3 x 72 B ("false", seen at full %ld width, t at
+        // its 7-char buffer limit).
         LinkSensor::Reading rd[SL2_MAX_DIALS];
         const int nr = LinkSensor::readings(rd);
         stateAppend(buf, bufSz, &n, &want, ",\"remoteDials\":[");
