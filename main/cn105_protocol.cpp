@@ -163,6 +163,23 @@ void CN105Controller::loop() {
         return;
     }
 
+    // ── First connect since boot: one clear unless a source has fed ──────
+    // A room source fed before this controller restarted may still be held
+    // by the pump. If nothing has written the register since boot (no
+    // source is feeding), hand it back to the thermistor once. Checked and
+    // staged under one lock, so a source that writes concurrently wins.
+    if (_bootClear == BOOT_CLEAR_POLLING && !_cycleRunning) {
+        _bootClear = BOOT_CLEAR_DONE;
+        taskENTER_CRITICAL(&_mux);
+        const bool clear = !_remoteWritten;
+        if (clear) {
+            _pendingRemoteTemp = true;
+            _pendingRemoteTempC = NAN;
+        }
+        taskEXIT_CRITICAL(&_mux);
+        if (clear) LOG_INFO("No room source since boot — clearing any remote temperature the unit kept");
+    }
+
     // ── Send pending remote temperature (same deferred pattern) ──────────
     if (_pendingRemoteTemp && !_cycleRunning) {
         taskENTER_CRITICAL(&_mux);
@@ -227,6 +244,7 @@ void CN105Controller::loop() {
         if ((uint32_t)(now - _lastCycleEnd) >= _updateInterval + _pollDelayMs) {
             _pollDelayMs = 0;
             LOG_DEBUG("Starting new poll cycle");
+            if (_bootClear == BOOT_CLEAR_ARMED) _bootClear = BOOT_CLEAR_POLLING;
             _cycleRunning = true;
             _cycleStartMs = now;
             _pollPhase = 0;
@@ -398,6 +416,7 @@ void CN105Controller::sendRemoteTemperature(float tempC) {
     taskENTER_CRITICAL(&_mux);
     _pendingRemoteTemp = true;
     _pendingRemoteTempC = tempC;
+    _remoteWritten = true;
     taskEXIT_CRITICAL(&_mux);
     LOG_DEBUG("CMD: sendRemoteTemperature(%.1f%sC)", tempC, "\xC2\xB0");
 }
@@ -406,6 +425,7 @@ void CN105Controller::clearRemoteTemperature() {
     taskENTER_CRITICAL(&_mux);
     _pendingRemoteTemp = true;
     _pendingRemoteTempC = NAN;
+    _remoteWritten = true;
     taskEXIT_CRITICAL(&_mux);
     LOG_DEBUG("CMD: clearRemoteTemperature()");
 }
@@ -674,6 +694,7 @@ void CN105Controller::processPacket(const uint8_t *pkt, uint8_t len) {
             // A new handshake always starts a fresh poll immediately. Do not
             // retain a pre-disconnect cycle timestamp or SET deferral.
             _lastCycleEnd = uptime_ms() - _updateInterval;
+            if (_bootClear != BOOT_CLEAR_DONE) _bootClear = BOOT_CLEAR_ARMED;
             break;
 
         case CN105_PKT_SET_ACK:

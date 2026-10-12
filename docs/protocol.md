@@ -38,6 +38,8 @@ A SET command (type `0x41`) that overrides the heat pump's internal thermistor w
 
 Both encodings are sent in the same packet — the heat pump uses whichever it supports. Temperature is rounded to the nearest 0.5°C.
 
+The unit keeps the last remote temperature it was fed when the controller restarts. On the first connection after boot, when the first poll cycle ends, the controller sends one disable packet unless a room source has already written the register since boot. A source that starts feeding later simply overrides it.
+
 ## Serin Link Bonds
 
 The unit side of the Serin Link pairing lives in `main/sl2_link.c` (vendored from the Serin Link core). Bonds and the unit's identity are stored in NVS namespace `serinlink`:
