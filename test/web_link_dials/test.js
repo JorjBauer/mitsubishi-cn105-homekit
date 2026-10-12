@@ -59,6 +59,10 @@ same(ui.linkDialList({ remoteBonded: true, remoteDials: [A] }), [], 'one dial, n
 same(ui.linkDialList({ remoteBonded: true }), [], 'missing field, no list');
 same(ui.linkDialList({ remoteBonded: false, remoteDials: [A, B] }), [], 'unpaired, no list');
 
+// Each row's Forget names its dial for assistive tech, not just "Forget".
+ok(ui.linkDialRowHtml(B).indexOf('aria-label="Forget Link ' + B.mac + '"') >= 0,
+   'per-dial Forget carries the MAC in its accessible name');
+
 // Pair: offered before the first dial and, as "Pair another Link", while the
 // bond table has room; hidden while a window is open or the table is full.
 {

@@ -2521,7 +2521,8 @@ a:focus-visible,button:focus-visible,input:focus-visible,select:focus-visible{ou
     return '<div class="status-item dial-row"><div style="min-width:0">'+
       '<span class="status-label">'+escHtml(st)+'</span>'+
       '<span class="item-val mono">'+escHtml(d.mac)+'</span></div>'+
-      '<button type="button" class="btn-danger grow0" data-mac="'+escHtml(d.mac)+'">Forget</button></div>';
+      '<button type="button" class="btn-danger grow0" data-mac="'+escHtml(d.mac)+'"'+
+      ' aria-label="Forget Link '+escHtml(d.mac)+'">Forget</button></div>';
   }
   var LINK_MAX_DIALS=4;   // SL2_MAX_DIALS (main/sl2_bond.h); test/web_link_dials pins it
   // The Pair button's label, or null to hide it: always before the first
