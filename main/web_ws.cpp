@@ -605,13 +605,9 @@ void WebUI::handleWsMessage(httpd_req_t *req, const char *msg) {
         sendWsText(httpd_req_to_sockfd(req),
                    "{\"type\":\"info\",\"msg\":\"Factory reset — erasing all settings and restarting...\"}");
         vTaskDelay(pdMS_TO_TICKS(300));   // let the frame flush
-        // nvs_flash_erase() closes every handle and deinits the partition
-        // itself (nvs_api.cpp runs close_handles_and_deinit before erasing),
-        // so an explicit nvs_flash_deinit() bought nothing here: it does not
-        // wait for concurrent users, it only freed the Storage object under a
-        // settings.save() / eventlog_append() / HAP pairing write that little
-        // bit sooner. The erase keeps only the unit's Serin Link identity,
-        // so dials that pinned it can pair again.
+        // The erase owner latches the normal-writer guard before erasing.
+        // It restores only the unit's Serin Link identity, so dials that
+        // pinned it can pair again, then leaves NVS deinitialized.
         espnow_factory_erase_nvs();
         esp_restart();
 

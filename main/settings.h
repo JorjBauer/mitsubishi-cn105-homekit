@@ -131,6 +131,9 @@ class SettingsStore {
 public:
     void begin();
     void save();
+    // Boot-latched before factory erase; all normal NVS writers must stop.
+    static void beginFactoryReset();
+    static bool isFactoryResetting();
     DeviceSettings& get() { return _settings; }
     const DeviceSettings& get() const { return _settings; }
     // Bumped on every save() — lets consumers poll "did settings change?"

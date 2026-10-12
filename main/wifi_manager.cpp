@@ -1,5 +1,6 @@
 #include "wifi_manager.h"
 #include "logging.h"
+#include "settings.h"
 #include "esp_utils.h"
 
 #include <cstring>
@@ -217,6 +218,7 @@ void WifiManager::init(const char* hostname, const char* apName, const char* apP
 // auth/PMF policy lives in one place.
 static void applyStaConfig(const char *ssid, const char *password)
 {
+    if (settings.isFactoryResetting()) return;
     wifi_config_t cfg = {};
     // STA fields are fixed-width bytes, not necessarily NUL-terminated.
     // Full-length credentials use every byte; shorter values keep a zero tail.
@@ -235,6 +237,7 @@ static void applyStaConfig(const char *ssid, const char *password)
 
 bool WifiManager::connect(const char* ssid, const char* password)
 {
+    if (settings.isFactoryResetting()) return false;
     if (!ssid || ssid[0] == '\0') {
         LOG_ERROR("connect() called with empty SSID");
         return false;
@@ -320,6 +323,7 @@ WifiManager::WifiTrialState WifiManager::getTrialState()
 
 void WifiManager::loop()
 {
+    if (settings.isFactoryResetting()) return;
     // Trials are rare and their deadline is 30 s — a 250 ms gate keeps the
     // spinlock (interrupts-off window) off the ~10 ms main-loop tick that
     // runs for the device's whole life.
@@ -456,6 +460,7 @@ void WifiManager::getIP(char* out, size_t len)
 
 void WifiManager::enableAP(const char* apName, const char* apPassword)
 {
+    if (settings.isFactoryResetting()) return;
     if (s_apActive) return;
 
     // Create AP netif lazily (only once)
@@ -491,6 +496,7 @@ void WifiManager::enableAP(const char* apName, const char* apPassword)
 
 void WifiManager::disableAP()
 {
+    if (settings.isFactoryResetting()) return;
     if (!s_apActive) return;
 
     ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
@@ -530,6 +536,7 @@ bool WifiManager::loadCredentials(char* ssid, size_t ssidLen, char* password, si
 
 void WifiManager::saveCredentials(const char* ssid, const char* password)
 {
+    if (settings.isFactoryResetting()) return;
     nvs_handle_t handle;
     esp_err_t err = nvs_open(NVS_NAMESPACE, NVS_READWRITE, &handle);
     if (err != ESP_OK) {
@@ -548,6 +555,7 @@ void WifiManager::saveCredentials(const char* ssid, const char* password)
 
 void WifiManager::eraseCredentials()
 {
+    if (settings.isFactoryResetting()) return;
     nvs_handle_t handle;
     esp_err_t err = nvs_open(NVS_NAMESPACE, NVS_READWRITE, &handle);
     if (err != ESP_OK) {

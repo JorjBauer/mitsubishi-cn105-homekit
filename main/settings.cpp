@@ -3,12 +3,22 @@
 #include "sl2_proto.h"
 
 #include <algorithm>
+#include <atomic>
 #include <cmath>
 #include <cstring>
 
 static const char *TAG = "settings";
 
 SettingsStore settings;
+static std::atomic<bool> s_factoryResetting{false};
+
+void SettingsStore::beginFactoryReset() {
+    s_factoryResetting.store(true);
+}
+
+bool SettingsStore::isFactoryResetting() {
+    return s_factoryResetting.load();
+}
 
 // Key renames (RevK `.old=` pattern): on boot, if newKey is absent and oldKey
 // holds a value, the value is copied (type read from NVS, so entries need no
@@ -521,6 +531,7 @@ uint8_t room_source_derived(const DeviceSettings &s) {
 }
 
 void SettingsStore::save() {
+    if (isFactoryResetting()) return;
     nvs_set_u8(_handle, "schemaVer", SETTINGS_SCHEMA_VERSION);
     nvs_set_u8(_handle, "logLevel", _settings.logLevel);
     nvs_set_u32(_handle, "pollMs", _settings.pollMs);

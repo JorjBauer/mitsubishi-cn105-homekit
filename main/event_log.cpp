@@ -8,6 +8,7 @@
 #include <freertos/semphr.h>
 
 #include "logging.h"
+#include "settings.h"
 #include "esp_utils.h"
 #include "json_utils.h"
 #include "time_sync.h"
@@ -41,7 +42,7 @@ static void appendLocked(EventType type, uint8_t code) {
 }
 
 static void persistLocked() {
-    if (!s_nvs) return;
+    if (!s_nvs || settings.isFactoryResetting()) return;
     nvs_set_blob(s_nvs, KEY_RING, &s_blob, sizeof(s_blob));
     nvs_commit(s_nvs);
 }

@@ -5,6 +5,21 @@ static bool storedPaired(){auto& ns=hkNvs.committed["ac-settings"];return ns.cou
 static void reboot(){settings=SettingsStore{};hkNvs.pending.clear();settings.begin();controllers=0;s_started=false;s_pairingsReset=false;}
 int main(int,char**argv){
  settings.begin();
+ CASE("factory_reset_blocks_first_start") {
+  settings.beginFactoryReset();
+  CHECK(settings.isFactoryResetting());
+  bool result=start();
+  CHECK(hapInitCalls==0);CHECK(hapStartCalls==0);
+  CHECK(!result);CHECK(!homekit_is_started());
+ }
+ CASE("factory_reset_blocks_failed_start_retry") {
+  startResult=ESP_FAIL;CHECK(!start());CHECK(!homekit_is_started());
+  CHECK(hapInitCalls==1);CHECK(hapStartCalls==1);
+  settings.beginFactoryReset();startResult=HAP_SUCCESS;
+  bool result=start();
+  CHECK(hapInitCalls==1);CHECK(hapStartCalls==1);
+  CHECK(!result);CHECK(!homekit_is_started());
+ }
  CASE("initial_setup") {
   CHECK(!storedPaired());CHECK(start());CHECK(!storedPaired());
   CHECK(!strcmp(webHkSetupValue(true,controllers,homekit_get_setup_code()),"234-56-789"));

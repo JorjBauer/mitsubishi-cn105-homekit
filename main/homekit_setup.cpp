@@ -147,6 +147,7 @@ static uint8_t current_service_shape(void)
 // change and bump a second time.
 static void store_service_shape(bool bumpOnChange)
 {
+    if (settings.isFactoryResetting()) return;
     if (!s_started) return;   // DB shape is meaningless before hap_start()
 
     nvs_handle_t h;
@@ -219,6 +220,7 @@ bool homekit_init(const char* name, const char* manufacturer,
                   const char* model, const char* serialNumber,
                   const char* fwRevision, const char* mdnsHostname)
 {
+    if (settings.isFactoryResetting()) return false;
     // main.cpp retries this function every loop iteration on failure, so each
     // one-shot step (hap_init, accessory creation, handler registration) is
     // guarded by a progress flag — re-running them would duplicate accessories
