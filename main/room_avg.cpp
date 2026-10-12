@@ -74,11 +74,17 @@ void RoomAvg::loop(CN105Controller &cn105) {
         const uint8_t members = st.roomMembers & (uint8_t)~(1u << ROOM_MEMBER_INTERNAL);
 
         if (members & (1u << ROOM_MEMBER_LINK)) {
-            float t = LinkSensor::temperature();
-            if (LinkSensor::isActive() && !std::isnan(t))
-                contribute(ROOM_MEMBER_LINK, t, LinkSensor::lastUpdateAge());
-            else
-                ns.exclStale |= (1u << ROOM_MEMBER_LINK);
+            // Every fresh dial is its own contributor (equal weight, the
+            // shared Link offset); the member is stale only when none is.
+            LinkSensor::Reading rd[SL2_MAX_DIALS];
+            const int nr = LinkSensor::readings(rd);
+            bool anyLink = false;
+            for (int i = 0; i < nr; i++) {
+                if (!rd[i].fresh || std::isnan(rd[i].temperature)) continue;
+                contribute(ROOM_MEMBER_LINK, rd[i].temperature, rd[i].ageMs);
+                anyLink = true;
+            }
+            if (!anyLink) ns.exclStale |= (1u << ROOM_MEMBER_LINK);
         }
 
 #ifdef BLE_ENABLE

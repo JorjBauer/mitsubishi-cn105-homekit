@@ -110,18 +110,24 @@ public:
 static void ticks(CN105Controller& c,int n=12,uint32_t step=10){for(int i=0;i<n;i++){c.loop();now_ms+=step;}}
 '''
 
+# The real Average blend shares this translation unit with the Link feed, so
+# its file statics are renamed apart from link_sensor.cpp's same-named ones.
+room_avg = re.sub(r"\b(TAG|s_mux|s_status|s_feed|s_pendingClear)\b", r"avg_\1",
+                  clean("room_avg.cpp"))
 LINK = HOST + r'''
 #include "room_feed.h"
 #include "link_units.h"
-constexpr int ROOM_MEMBER_LINK=1;
-struct DeviceSettings{uint64_t roomSourceId=0;int roomMode=0,roomSingle=1,roomStaleTimeoutS=600;};
+#include "sl2_bond.h"
+constexpr int ROOM_MAX_BLE_SENSORS=4,ROOM_MEMBER_INTERNAL=0,ROOM_MEMBER_LINK=1,ROOM_MEMBER_BLE0=2,
+ ROOM_MEMBER_COUNT=ROOM_MEMBER_BLE0+ROOM_MAX_BLE_SENSORS;
+struct DeviceSettings{uint64_t roomSourceId=0;int roomMode=0,roomSingle=1,roomStaleTimeoutS=600;uint8_t roomMembers=0;};
 struct Settings{DeviceSettings s;DeviceSettings& get(){return s;}void save(){}}settings;
 static int room_offset_dc(const DeviceSettings&,int){return 0;}
-namespace RoomAvg {static bool feeding=false;bool isFeeding(){return feeding;}}
+static float room_apply_offset(const DeviceSettings&,int,float t){return t;}
 class CN105Controller{public:float temp=NAN;int sends=0,clears=0;bool connected=true;
  bool isConnected(){return connected;}void sendRemoteTemperature(float t){temp=t;++sends;}
  void clearRemoteTemperature(){temp=NAN;++clears;}};
-''' + clean("link_sensor.h") + clean("link_sensor.cpp")
+''' + clean("link_sensor.h") + clean("room_avg.h") + clean("link_sensor.cpp") + room_avg
 
 ble = (MAIN / "ble_sensor.cpp").read_text()
 BLE = HOST + r'''
@@ -159,8 +165,6 @@ adapter = (MAIN / "espnow_link.cpp").read_text()
 # Exercise the real catalog and selection adapter too. Only the bonded-dial
 # store is a fixture; its two MACs stand for already-authenticated peers.
 LINK += r'''
-#include "sl2_bond.h"
-constexpr int ROOM_MEMBER_INTERNAL=0,ROOM_MEMBER_BLE0=2,ROOM_MAX_BLE_SENSORS=4;
 #define ROOM_CATALOG_MAX (2 + ROOM_MAX_BLE_SENSORS + 1 + SL2_MAX_DIALS)
 struct BondedDials {};
 static BondedDials s_link;
@@ -170,12 +174,7 @@ static bool sl2_link_dial_mac(const BondedDials*,int index,uint8_t out[6]) {
  if(index<0||index>=2)return false;
  memcpy(out,macs[index],6);return true;
 }
-namespace RoomAvg {
- bool averageSelectable(){return false;}
- bool memberAvailable(int bit);
-}
 '''
-LINK += "\n" + function((MAIN / "room_avg.cpp").read_text(), "RoomAvg::memberAvailable")
 LINK += "\n" + function((MAIN / "esp_utils.h").read_text(), "fnv1a32")
 LINK += "\n" + "\n".join(function(adapter, n) for n in
     ["copy_name", "room_catalog_build", "room_catalog_hash", "room_catalog_revision", "h_room_source_set"])

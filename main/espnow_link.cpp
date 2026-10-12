@@ -552,19 +552,17 @@ static bool h_apply(void *, uint16_t mask, const struct sl2_cmd_pkt *cmd) {
 
 /* A bonded dial reported its own sensor (reading, and optionally a source
  * edit). Always feed the reading — even when it isn't the selected source —
- * so LinkSensor's freshness/status tracking stays live for a source switch
- * later. The edit is separate: is_edit is only true for a long-enough frame
- * carrying something other than the NOEDIT sentinel (core-verified, see
+ * so LinkSensor's per-dial freshness/status tracking stays live for a source
+ * switch later. The edit is separate: is_edit is only true for a long-enough
+ * frame carrying something other than the NOEDIT sentinel (core-verified, see
  * sl2_link.h), but the VALUE still needs validating here — it crossed the
  * air. RoomAvg::legacySrcSelectable() is the same test the web UI applies:
  * it rejects anything past the three known sources, and BLE when no slot is
  * configured. LINK is deliberately NOT judged through legacySrcSelectable(),
- * whose LINK case reads the global LinkSensor::hasSensor() flag — once a pin
- * is in place, feed() above only updates that flag from frames matching the
- * CURRENT pin (see feed()'s per-dial filter), so it can be stale for any
- * other dial. A second, sensorless dial asking to pin itself would then be
- * judged against the pinned dial's flag, not its own. So for LINK this
- * checks THIS packet's own SL2_DSF_HAS_SENSOR bit instead. */
+ * whose LINK case reads LinkSensor::hasSensor() — true when ANY dial has
+ * sensing hardware. A sensorless dial asking to pin itself would pass on
+ * another dial's capability. So for LINK this checks THIS packet's own
+ * SL2_DSF_HAS_SENSOR bit instead. */
 static void h_room_sensor(void *, const uint8_t src_mac[6],
                           const struct sl2_dial_sensor_pkt *p, bool is_edit) {
     LinkSensor::feed(src_mac, p);
@@ -583,11 +581,6 @@ static void h_room_sensor(void *, const uint8_t src_mac[6],
         st.roomSingle   = single;
         st.roomSourceId = pin;   // a pre-catalog "Link" edit means "use me"
         settings.save();         // re-derives roomSource; keeps a NS_LINK pin
-        // The feed above ran before the pin moved, so if a DIFFERENT dial
-        // held the old pin, feed()'s per-dial filter discarded this frame's
-        // reading. Re-feed now that this dial's pin is in effect, so the
-        // edit doesn't read UNAVAILABLE until its next ~3 Hz retry.
-        LinkSensor::feed(src_mac, p);
         LOG_INFO("room source -> %u (set from dial)", (unsigned)p->want_src);
     }
 }
@@ -1155,7 +1148,10 @@ void EspnowLink::loop() {
      * and the bond table is untouched, so the Link room source stays too. */
     if (s_reqForgetAll) {
         s_reqForgetAll = false;
-        if (sl2_link_forget_all(&s_link)) room_source_drop_link();
+        if (sl2_link_forget_all(&s_link)) {
+            LinkSensor::forget(nullptr);
+            room_source_drop_link();
+        }
     }
     if (s_reqPairStart)  { s_reqPairStart = false;  sl2_link_pair_start(&s_link, PAIR_WINDOW_S * 1000); }
     if (s_reqPairCancel) { s_reqPairCancel = false; sl2_link_pair_cancel(&s_link); }
