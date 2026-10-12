@@ -3,7 +3,8 @@
  *
  * Owns the heat pump's remote-temp register whenever roomMode == average:
  * equal-weight mean of the checked, non-stale members with per-sensor offsets
- * applied first, sent through the same room_feed change/keepalive rate
+ * applied first (the Link member counts each fresh bonded dial on its own),
+ * sent through the same room_feed change/keepalive rate
  * limiting as the single-source paths. The internal thermistor is never
  * blended with a live remote (the CN105 echoes the fed value back as the room
  * temp, so the thermistor is unobservable while feeding); internal-only

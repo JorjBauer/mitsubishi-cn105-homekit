@@ -17,6 +17,7 @@
 #include <algorithm>
 #include <atomic>
 #include <cmath>
+#include "web_security.h"
 #include <cstdarg>
 #include "ble_config.h"
 #ifdef BLE_ENABLE
@@ -43,9 +44,17 @@ static constexpr uint32_t WS_LOG_RESUME_HEAP = 70 * 1024;
 // WebSocket handler: GET /ws
 // ══════════════════════════════════════════════════════════════════════════════
 
+// Cross-site WebSocket hijacking: browsers attach Origin to the upgrade and
+// nothing else stops a foreign page driving this socket. Runs before the 101
+// response, so a refusal is a plain HTTP 403 and no upgrade happens.
+esp_err_t WebUI::wsPreHandshake(httpd_req_t *req) {
+    return requireSameOrigin(req) ? ESP_OK : ESP_FAIL;
+}
+
 esp_err_t WebUI::handleWebSocket(httpd_req_t *req) {
     // On first call (handshake), req->method == HTTP_GET
     if (req->method == HTTP_GET) {
+        // The Origin check already ran in wsPreHandshake, before the 101.
         int fd = httpd_req_to_sockfd(req);
 
         // All WS writes (including SDK control frames) run on httpd. Retire
@@ -176,7 +185,7 @@ void WebUI::handleWsMessage(httpd_req_t *req, const char *msg) {
         }
 
         float floatVal;
-        if (jsonGetFloat(msg, "target", &floatVal)) {
+        if (jsonGetFloat(msg, "target", &floatVal) && std::isfinite(floatVal)) {
             LOG_INFO("Set target=%.1f", floatVal);
             _ctrl->setTargetTemp(floatVal);
             hasControlChange = true;
@@ -209,13 +218,13 @@ void WebUI::handleWsMessage(httpd_req_t *req, const char *msg) {
 
         float heatT, coolT;
         bool heatSet = false, coolSet = false;
-        if (jsonGetFloat(msg, "heatThresh", &heatT)) {
+        if (jsonGetFloat(msg, "heatThresh", &heatT) && std::isfinite(heatT)) {
             heatT = std::clamp(heatT, CN105_TEMP_MIN, CN105_TEMP_MAX);
             settings.get().heatingThreshold = heatT;
             heatSet = true;
             LOG_INFO("Set heatingThreshold=%.1f", heatT);
         }
-        if (jsonGetFloat(msg, "coolThresh", &coolT)) {
+        if (jsonGetFloat(msg, "coolThresh", &coolT) && std::isfinite(coolT)) {
             coolT = std::clamp(coolT, CN105_TEMP_MIN, CN105_TEMP_MAX);
             settings.get().coolingThreshold = coolT;
             coolSet = true;
@@ -601,17 +610,28 @@ void WebUI::handleWsMessage(httpd_req_t *req, const char *msg) {
         // so an explicit nvs_flash_deinit() bought nothing here: it does not
         // wait for concurrent users, it only freed the Storage object under a
         // settings.save() / eventlog_append() / HAP pairing write that little
-        // bit sooner.
-        nvs_flash_erase();
+        // bit sooner. The erase keeps only the unit's Serin Link identity,
+        // so dials that pinned it can pair again.
+        espnow_factory_erase_nvs();
         esp_restart();
 
     } else if (strcmp(cmd, "restart") == 0) {
+        if (!webConfirmed(msg, "RESTART")) {
+            sendWsText(httpd_req_to_sockfd(req),
+                       "{\"type\":\"error\",\"msg\":\"Restart not confirmed\"}");
+            return;
+        }
         LOG_INFO("Restart requested");
         sendWsText(httpd_req_to_sockfd(req), "{\"type\":\"info\",\"msg\":\"Restarting...\"}");
         vTaskDelay(pdMS_TO_TICKS(500));
         esp_restart();
 
     } else if (strcmp(cmd, "hkReset") == 0) {
+        if (!webConfirmed(msg, "RESET")) {
+            sendWsText(httpd_req_to_sockfd(req),
+                       "{\"type\":\"error\",\"msg\":\"HomeKit reset not confirmed\"}");
+            return;
+        }
         LOG_WARN("HomeKit pairing reset requested");
         eventlog_append(EV_HK_RESET);
         if (homekit_reset_pairings()) {
@@ -624,9 +644,14 @@ void WebUI::handleWsMessage(httpd_req_t *req, const char *msg) {
 
     } else if (strcmp(cmd, "wifiForget") == 0) {
         // ── Erase stored WiFi credentials, reboot into the setup AP ──────
-        // Deliberately NOT gated by a typed confirm string. factoryReset is,
-        // because it is irreversible; this is recoverable in under a minute
-        // from the AP, so it sits with hkReset / forgetRemote / restart.
+        // Gated by a typed confirm string like factoryReset: with no LAN
+        // authentication, a single forged frame must not be able to drop the
+        // unit off the network.
+        if (!webConfirmed(msg, "FORGET")) {
+            sendWsText(httpd_req_to_sockfd(req),
+                       "{\"type\":\"error\",\"msg\":\"Wi-Fi forget not confirmed\"}");
+            return;
+        }
         LOG_WARN("WiFi credential erase requested");
         eventlog_append(EV_WIFI_CREDS_CHANGED, 1);   // code 1 = erased
         sendWsText(httpd_req_to_sockfd(req), "{\"type\":\"wifiForgotten\"}");
@@ -638,6 +663,26 @@ void WebUI::handleWsMessage(httpd_req_t *req, const char *msg) {
         LOG_WARN("ESP-NOW remote forget requested");
         sendWsText(httpd_req_to_sockfd(req), "{\"type\":\"info\",\"msg\":\"Forgetting remote...\"}");
         espnow_forget_and_restart();
+
+    } else if (strcmp(cmd, "forgetDial") == 0) {
+        // One bonded dial, by MAC: the others stay paired and nothing
+        // restarts. 24 B so an over-long value fails the 17-char MAC parse
+        // instead of being truncated into one.
+        char macStr[24] = "";
+        uint8_t mac[6];
+        if (!espnowLink.isStarted()) {
+            sendWsText(httpd_req_to_sockfd(req),
+                       "{\"type\":\"error\",\"msg\":\"Serin Link is not running on this unit\"}");
+            return;
+        }
+        if (!jsonGetString(msg, "mac", macStr, sizeof(macStr)) ||
+            !mac_from_str(macStr, mac) || !espnowLink.forgetDial(mac)) {
+            sendWsText(httpd_req_to_sockfd(req),
+                       "{\"type\":\"error\",\"msg\":\"That Link is not paired to this unit\"}");
+            return;
+        }
+        LOG_WARN("Serin Link forget requested for %s", macStr);
+        sendWsText(httpd_req_to_sockfd(req), "{\"type\":\"info\",\"msg\":\"Forgetting Link...\"}");
 
     } else if (strcmp(cmd, "pairRemote") == 0) {
         LOG_INFO("ESP-NOW pairing window requested");
@@ -722,11 +767,12 @@ void WebUI::pushState() {
     // (dstLen - 2): header 475 (31-char deviceName + 32-char SSID, both fully
     // escaped, plus roomMembers) + 58 outsideTemp/errorCode/runtime
     // + 183 heap/health + 44 thresholds + 108 night gate + 387 remote/dial
-    // (escaped model + fw) + 327 config + HomeKit (setup code + URI) + 195
-    // room/Link + 215 blend + roomOffs + 278 legacy BLE + 928 for four
-    // bleSensors[] entries with 48-char escaped names + 1 closing brace
-    // = 3199 B. 4096 keeps ~28% for fields added later; overflow past that
-    // degrades (see the sections below).
+    // (escaped model + fw) + 304 remoteDials (four bonded dials) + 327
+    // config + HomeKit (setup code + URI) + 195 room/Link + 215 blend +
+    // roomOffs + 278 legacy BLE + 928 for four bleSensors[] entries with
+    // 48-char escaped names + 1 closing brace = 3503 B. 4096 keeps ~14% for
+    // fields added later; overflow past that degrades (see the sections
+    // below).
     constexpr size_t bufSz = 4096;
     // Tail the sections can never eat, so the closing brace (and the
     // truncation marker) always fit however full the body ran.
@@ -890,6 +936,28 @@ void WebUI::pushState() {
             espnowLink.pairingSecondsLeft(),
             espnowLink.pairResult());
 
+        // Every bonded dial, for the card's per-dial Forget list; t is that
+        // dial's own fresh reading. Worst case 304 B: 17 B framing + 71 B for
+        // the first entry + 3 x 72 B ("false", seen at full %ld width, t at
+        // its 7-char buffer limit).
+        LinkSensor::Reading rd[SL2_MAX_DIALS];
+        const int nr = LinkSensor::readings(rd);
+        stateAppend(buf, bufSz, &n, &want, ",\"remoteDials\":[");
+        EspnowDialRow row;
+        for (int i = 0; espnowLink.bondedDial(i, row); i++) {
+            char t[8] = "null";
+            for (int j = 0; j < nr; j++)
+                if (memcmp(rd[j].mac, row.mac, 6) == 0 && rd[j].fresh &&
+                    !std::isnan(rd[j].temperature))
+                    snprintf(t, sizeof(t), "%.2f", rd[j].temperature);
+            stateAppend(buf, bufSz, &n, &want,
+                "%s{\"mac\":\"%02X:%02X:%02X:%02X:%02X:%02X\",\"live\":%s,\"seen\":%ld,\"t\":%s}",
+                i ? "," : "", row.mac[0], row.mac[1], row.mac[2], row.mac[3],
+                row.mac[4], row.mac[5], row.live ? "true" : "false",
+                (long)row.lastSeenSec, t);
+        }
+        stateAppend(buf, bufSz, &n, &want, "]");
+
         EspnowDialDetail dd;
         if (espnowLink.getDialDetail(dd)) {
             // remoteCertState: sl2_cert_state_t — 0 NONE (unprovisioned dial,
@@ -945,8 +1013,8 @@ void WebUI::pushState() {
         (hkReady && hkControllers > 0) ? "true" : "false",
         hkControllers,
         homekit_get_status_string(),
-        hkReady ? homekit_get_setup_code() : "",
-        hkReady ? homekit_get_setup_payload() : ""
+        webHkSetupValue(hkReady, hkControllers, homekit_get_setup_code()),
+        webHkSetupValue(hkReady, hkControllers, homekit_get_setup_payload())
     );
     section();
 

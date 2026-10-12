@@ -352,6 +352,14 @@ private:
     // ── Pending remote temperature (NAN = clear/revert to internal) ─────
     bool     _pendingRemoteTemp  = false;
     float    _pendingRemoteTempC = 0.0f;   // only read while _pendingRemoteTemp is set
+    bool     _remoteWritten      = false;  // any send/clearRemoteTemperature() since boot
+
+    // ── First-connect clear (CN105 task only) ─────────────────────────────
+    // The pump keeps a fed remote temperature across a controller restart.
+    // Armed by each CONNECT_OK until it has run once; runs when that
+    // connection's first poll cycle ends, so the handshake still polls first.
+    enum : uint8_t { BOOT_CLEAR_IDLE, BOOT_CLEAR_ARMED, BOOT_CLEAR_POLLING, BOOT_CLEAR_DONE };
+    uint8_t  _bootClear = BOOT_CLEAR_IDLE;
 
     // ── RX buffer ───────────────────────────────────────────────────────────
     uint8_t  _rxBuf[32];

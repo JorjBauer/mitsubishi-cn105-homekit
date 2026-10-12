@@ -52,6 +52,8 @@ HOST = r'''
 #include "sl2_proto.h"
 #include "cn105_baud.h"
 #include "uart_interface.h"
+// The host tests read CN105Controller::_tempMode and _wanted directly, so private is opened here; keep this define below the system includes.
+#define private public
 using uart_port_t=int;
 using portMUX_TYPE=int;
 #define portMUX_INITIALIZER_UNLOCKED 0
@@ -79,18 +81,19 @@ PUMP = r'''
 class Pump : public UartInterface {
 public:
  std::deque<uint8_t> rx;
- int infos=0,connects=0,sets=0;
+ int infos=0,connects=0,sets=0,remoteSets=0,remoteClears=0;
  bool responding=true;
  uint32_t readCostMs=0;
  uint8_t mode=CN105_MODE_AUTO;
- uint8_t target=172;
+ uint8_t target=172,roomRaw=170;
+ bool legacy=false;int legacyC=22;
  int read(uint8_t* b,size_t n) override {size_t i=0;while(i<n&&!rx.empty()){b[i++]=rx.front();rx.pop_front();}if(i)now_ms+=readCostMs;return i;}
  size_t available() override {return rx.size();}
  void flush() override {rx.clear();}
  void packet(uint8_t type,uint8_t subtype) {
   uint8_t p[22]={};CN105Controller::buildHeader(p,type,16);p[5]=subtype;
-  if(subtype==CN105_INFO_SETTINGS){p[8]=1;p[9]=mode;p[16]=target;}
-  if(subtype==CN105_INFO_ROOMTEMP)p[11]=170;
+  if(subtype==CN105_INFO_SETTINGS){p[8]=1;p[9]=mode;if(legacy)p[10]=31-legacyC;else p[16]=target;}
+  if(subtype==CN105_INFO_ROOMTEMP)p[11]=roomRaw;
   if(subtype==CN105_INFO_ERRORCODE)p[9]=0x80;
   p[21]=CN105Controller::calcChecksum(p,21);
   for(uint8_t b:p)rx.push_back(b);
@@ -100,7 +103,8 @@ public:
   if(b[1]==CN105_PKT_INFO_REQ){++infos;if(responding)packet(CN105_PKT_INFO_RESP,b[5]);}
   if(b[1]==CN105_PKT_SET){
    ++sets;
-   if(b[5]==1){if(b[6]&CN105_FLAG_MODE)mode=b[9];if(b[6]&CN105_FLAG_TEMP)target=b[19];}
+   if(b[5]==0x07){if(b[6])++remoteSets;else ++remoteClears;}
+   if(b[5]==1){if(b[6]&CN105_FLAG_MODE)mode=b[9];if(b[6]&CN105_FLAG_TEMP){if(b[19])target=b[19];else legacyC=31-b[10];}}
    if(responding)packet(CN105_PKT_SET_ACK,0);
   }
  }
@@ -108,18 +112,24 @@ public:
 static void ticks(CN105Controller& c,int n=12,uint32_t step=10){for(int i=0;i<n;i++){c.loop();now_ms+=step;}}
 '''
 
+# The real Average blend shares this translation unit with the Link feed, so
+# its file statics are renamed apart from link_sensor.cpp's same-named ones.
+room_avg = re.sub(r"\b(TAG|s_mux|s_status|s_feed|s_pendingClear)\b", r"avg_\1",
+                  clean("room_avg.cpp"))
 LINK = HOST + r'''
 #include "room_feed.h"
 #include "link_units.h"
-constexpr int ROOM_MEMBER_LINK=1;
-struct DeviceSettings{uint64_t roomSourceId=0;int roomMode=0,roomSingle=1,roomStaleTimeoutS=600;};
+#include "sl2_bond.h"
+constexpr int ROOM_MAX_BLE_SENSORS=4,ROOM_MEMBER_INTERNAL=0,ROOM_MEMBER_LINK=1,ROOM_MEMBER_BLE0=2,
+ ROOM_MEMBER_COUNT=ROOM_MEMBER_BLE0+ROOM_MAX_BLE_SENSORS;
+struct DeviceSettings{uint64_t roomSourceId=0;int roomMode=0,roomSingle=1,roomStaleTimeoutS=600;uint8_t roomMembers=0;};
 struct Settings{DeviceSettings s;DeviceSettings& get(){return s;}void save(){}}settings;
 static int room_offset_dc(const DeviceSettings&,int){return 0;}
-namespace RoomAvg {static bool feeding=false;bool isFeeding(){return feeding;}}
+static float room_apply_offset(const DeviceSettings&,int,float t){return t;}
 class CN105Controller{public:float temp=NAN;int sends=0,clears=0;bool connected=true;
  bool isConnected(){return connected;}void sendRemoteTemperature(float t){temp=t;++sends;}
  void clearRemoteTemperature(){temp=NAN;++clears;}};
-''' + clean("link_sensor.h") + clean("link_sensor.cpp")
+''' + clean("link_sensor.h") + clean("room_avg.h") + clean("link_sensor.cpp") + room_avg
 
 ble = (MAIN / "ble_sensor.cpp").read_text()
 BLE = HOST + r'''
@@ -157,26 +167,29 @@ adapter = (MAIN / "espnow_link.cpp").read_text()
 # Exercise the real catalog and selection adapter too. Only the bonded-dial
 # store is a fixture; its two MACs stand for already-authenticated peers.
 LINK += r'''
-#include "sl2_bond.h"
-constexpr int ROOM_MEMBER_INTERNAL=0,ROOM_MEMBER_BLE0=2,ROOM_MAX_BLE_SENSORS=4;
 #define ROOM_CATALOG_MAX (2 + ROOM_MAX_BLE_SENSORS + 1 + SL2_MAX_DIALS)
-struct BondedDials {};
+#define portENTER_CRITICAL(mux) ((void)(mux))
+#define portEXIT_CRITICAL(mux) ((void)(mux))
+struct BondedDials {int n=2;uint8_t mac[SL2_MAX_DIALS][6]={{1,2,3,4,5,6},{6,5,4,3,2,1}};};
 static BondedDials s_link;
-static int sl2_link_dial_count(const BondedDials*) {return 2;}
-static bool sl2_link_dial_mac(const BondedDials*,int index,uint8_t out[6]) {
- const uint8_t macs[2][6]={{1,2,3,4,5,6},{6,5,4,3,2,1}};
- if(index<0||index>=2)return false;
- memcpy(out,macs[index],6);return true;
+static int sl2_link_dial_count(const BondedDials* l) {return l->n;}
+static bool sl2_link_dial_mac(const BondedDials* l,int index,uint8_t out[6]) {
+ if(index<0||index>=l->n)return false;
+ memcpy(out,l->mac[index],6);return true;
 }
-namespace RoomAvg {
- bool averageSelectable(){return false;}
- bool memberAvailable(int bit);
+static bool sl2_link_forget_dial(BondedDials* l,const uint8_t mac[6]) {
+ for(int i=0;i<l->n;i++)if(!memcmp(l->mac[i],mac,6)){
+  memmove(l->mac[i],l->mac[i+1],(size_t)(l->n-i-1)*6);l->n--;return true;}
+ return false;
 }
 '''
-LINK += "\n" + function((MAIN / "room_avg.cpp").read_text(), "RoomAvg::memberAvailable")
 LINK += "\n" + function((MAIN / "esp_utils.h").read_text(), "fnv1a32")
 LINK += "\n" + "\n".join(function(adapter, n) for n in
-    ["copy_name", "room_catalog_build", "room_catalog_hash", "room_catalog_revision", "h_room_source_set"])
+    ["copy_name", "room_catalog_build", "room_catalog_hash", "room_catalog_revision", "h_room_source_set",
+     "room_source_reconcile_catalog"])
+# The web forgetDial mailbox and its main-task drain, statics included.
+LINK += "\n" + adapter[adapter.index("/* Per-dial forget mailbox"):adapter.index("static void drain_forget_dials")]
+LINK += "\n" + function(adapter, "drain_forget_dials")
 thermo_name = "homekit_thermostat.cpp" if (MAIN / "homekit_thermostat.cpp").exists() else "matter_thermostat.cpp"
 thermo = (MAIN / thermo_name).read_text()
 strings = (MAIN / "cn105_strings.h").read_text()
@@ -203,7 +216,38 @@ AUTO += "\n" + block(thermo, thermo.index("struct AutoTarget")) + ";\n" + functi
 AUTO += "\nstatic void run_auto_sync(CN105Controller& cn105){const CN105State s=cn105.getEffectiveState();\n"
 AUTO += block(thermo, thermo.index("    if (s.power && s.mode == CN105_MODE_AUTO)")) + "\n}\n" + PUMP
 
-SOURCES = {"cn105_polling": CN105 + PUMP, "link_source": LINK, "ble_handoff": BLE, "auto_band": AUTO}
+# Factory reset against an in-memory NVS: erase wipes every namespace and
+# deinitializes, the way nvs_flash_erase() does on the device.
+FACTORY = HOST + r'''
+#include <map>
+#include <string>
+#include "sl2_link.h"
+using esp_err_t=int;using nvs_handle_t=uint32_t;
+enum nvs_open_mode_t{NVS_READONLY,NVS_READWRITE};
+constexpr esp_err_t ESP_OK=0,ESP_ERR_NVS_NOT_INITIALIZED=0x1101,ESP_ERR_NVS_NOT_FOUND=0x1102,
+ ESP_ERR_NVS_INVALID_LENGTH=0x110c;
+struct FakeNvs{bool init=true;int erases=0,inits=0,deinits=0;
+ std::map<std::string,std::map<std::string,std::vector<uint8_t>>> ns;std::vector<std::string> handles;}nvs;
+static esp_err_t nvs_open(const char* name,nvs_open_mode_t,nvs_handle_t* h){
+ if(!nvs.init)return ESP_ERR_NVS_NOT_INITIALIZED;nvs.handles.push_back(name);*h=nvs.handles.size();return ESP_OK;}
+static void nvs_close(nvs_handle_t){}
+static esp_err_t nvs_get_blob(nvs_handle_t h,const char* key,void* out,size_t* len){
+ auto& m=nvs.ns[nvs.handles[h-1]];auto it=m.find(key);if(it==m.end())return ESP_ERR_NVS_NOT_FOUND;
+ if(*len<it->second.size())return ESP_ERR_NVS_INVALID_LENGTH;
+ memcpy(out,it->second.data(),it->second.size());*len=it->second.size();return ESP_OK;}
+static esp_err_t nvs_set_blob(nvs_handle_t h,const char* key,const void* v,size_t len){
+ if(!nvs.init)return ESP_ERR_NVS_NOT_INITIALIZED;auto b=(const uint8_t*)v;
+ nvs.ns[nvs.handles[h-1]][key].assign(b,b+len);return ESP_OK;}
+static esp_err_t nvs_commit(nvs_handle_t){return nvs.init?ESP_OK:ESP_ERR_NVS_NOT_INITIALIZED;}
+static esp_err_t nvs_flash_erase(){nvs.ns.clear();nvs.init=false;++nvs.erases;return ESP_OK;}
+static esp_err_t nvs_flash_init(){nvs.init=true;++nvs.inits;return ESP_OK;}
+static esp_err_t nvs_flash_deinit(){nvs.init=false;++nvs.deinits;return ESP_OK;}
+static void sodium_memzero(void* b,size_t n){memset(b,0,n);}
+''' + re.search(r'^static const char \*SL2_NVS_NS = "[^"]+";', adapter, re.M).group(0)
+FACTORY += "\n" + "\n".join(function(adapter, n) for n in ["p_kv_get", "p_kv_set", "espnow_factory_erase_nvs"])
+
+SOURCES = {"cn105_polling": CN105 + PUMP, "link_source": LINK, "ble_handoff": BLE, "auto_band": AUTO,
+           "factory_reset": FACTORY}
 failed = False
 with tempfile.TemporaryDirectory(prefix="cn105-native-delivery-") as directory:
     build = Path(directory)

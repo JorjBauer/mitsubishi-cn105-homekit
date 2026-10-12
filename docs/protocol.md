@@ -37,3 +37,22 @@ A SET command (type `0x41`) that overrides the heat pump's internal thermistor w
 | 8 | Enhanced encoding: `temp * 2 + 128` (`0x80` when disabled) |
 
 Both encodings are sent in the same packet — the heat pump uses whichever it supports. Temperature is rounded to the nearest 0.5°C.
+
+The unit keeps the last remote temperature it was fed when the controller restarts. On the first connection after boot, when the first poll cycle ends, the controller sends one disable packet unless a room source has already written the register since boot. A source that starts feeding later simply overrides it.
+
+## Serin Link Bonds
+
+The unit side of the Serin Link pairing lives in `main/sl2_link.c` (vendored from the Serin Link core). Bonds and the unit's identity are stored in NVS namespace `serinlink`:
+
+| Key | Contents |
+|-----|----------|
+| `sl2_id` | The unit's Ed25519 identity: private key (64 B) then public key (32 B) |
+| `sl2_dials` | The bond table: up to 4 dials, each with MAC, link key, and the dial's pinned identity |
+| `sl2_cseq` | CAPS sequence number |
+
+Pairing is trust-on-first-use in both directions. The unit pins each dial's identity to its MAC, and the dial pins the unit's identity.
+
+- **Adding a dial.** The Link card offers **Pair another Link** while fewer than 4 dials are paired. With all 4 slots taken it hides the button, and the serial console command `espnow-pair` still opens a window.
+- **Re-pairing a bonded dial.** A pairing window opens even when all 4 slots are taken. A dial that is already bonded, presenting its pinned identity, re-pairs into its own slot with a fresh link key. A new dial is refused, and the window stays open for a bonded dial. If a new dial was refused and no bonded dial re-paired, the window closes with the result `full`. With no pairing attempt at all, it closes with `timeout`.
+- **Forgetting one dial.** The Link card lists every bonded dial once two or more are paired, each with its own **Forget**. That sends the WebSocket command `{"cmd":"forgetDial","mac":"AA:BB:CC:DD:EE:FF"}`, which removes that bond, its radio peer, and its room reading without a restart. **Forget All** (`forgetRemote`) clears every bond and restarts.
+- **Factory reset keeps the identity.** A factory reset erases every NVS namespace, including all bonds, then writes `sl2_id` back. Dials have pinned that identity, so a newly generated one would make each of them refuse to pair again until the dial itself was reset. After a factory reset, pair each dial again as if it were new.

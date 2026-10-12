@@ -648,12 +648,65 @@ static void test_forget_failure_preserves_pairing(void) {
     printf("forget storage failure preserves pairing ok\n");
 }
 
+/* A full bond table still opens the window: a bonded dial may re-pair (same
+ * pinned identity, fresh LMK, slot reused), while a fifth dial is refused and
+ * the window's verdict stays "full" rather than decaying to "timeout". */
+static void test_full_table_allows_bonded_repair(void) {
+    sl2_link_t l;
+    fresh(&l);
+    fdial_t d[SL2_MAX_DIALS];
+    for (int i = 0; i < SL2_MAX_DIALS; i++) {
+        dial_make(&d[i], (uint8_t)(0xA1 + i));
+        F.n_sent = 0;
+        pair_dial(&l, &d[i]);
+    }
+    assert(sl2_link_dial_count(&l) == SL2_MAX_DIALS);
+
+    fdial_t *again = &d[2];
+    uint8_t old_lmk[16];
+    memcpy(old_lmk, again->lmk, sizeof old_lmk);
+    t_xkp(NULL, again->eph_priv, again->eph_pub);   /* the dial's new handshake */
+    F.n_sent = 0;
+    sl2_link_pair_start(&l, 60000);
+    assert(sl2_link_pairing(&l));
+    assert(strcmp(sl2_link_pair_result(&l), "listening") == 0);
+    dial_request_and_accept(&l, again);
+    dial_confirm(&l, again);
+    assert(strcmp(sl2_link_pair_result(&l), "paired") == 0);
+    assert(sl2_link_dial_count(&l) == SL2_MAX_DIALS);
+    assert(memcmp(again->lmk, old_lmk, 16) != 0);
+    sl2_dial_bond_t recs[SL2_MAX_DIALS];
+    assert(saved_bonds(recs) == SL2_MAX_DIALS);
+    assert(memcmp(recs[2].mac, again->mac, 6) == 0);
+    assert(memcmp(recs[2].lmk, again->lmk, 16) == 0);
+    assert(memcmp(recs[2].id_pub, again->id_pub, 32) == 0);
+
+    /* A dial the table has no room for is refused, and says so. */
+    fdial_t extra;
+    dial_make(&extra, 0xEE);
+    F.n_sent = 0;
+    sl2_link_pair_start(&l, 60000);
+    assert(sl2_link_pairing(&l));
+    struct sl2_pair_req_pkt req;
+    dial_req(&extra, SL2_PROTO_VERSION, &req);
+    sl2_link_on_recv(&l, extra.mac, BCAST, (const uint8_t *)&req, (int)sizeof req);
+    assert(count_sends_of(SL2_PKT_PAIR_RESP) == 0);
+    assert(strcmp(sl2_link_pair_result(&l), "full") == 0);
+    F.now += 60000;
+    sl2_link_loop(&l);
+    assert(!sl2_link_pairing(&l));
+    assert(strcmp(sl2_link_pair_result(&l), "full") == 0);
+    assert(sl2_link_dial_count(&l) == SL2_MAX_DIALS);
+    printf("full table allows bonded re-pair ok\n");
+}
+
 int main(int argc, char **argv) {
     if (argc == 2) {
         if (strcmp(argv[1], "candidate-install") == 0) test_candidate_install_failure();
         else if (strcmp(argv[1], "forget-all-window") == 0) test_forget_all_closes_pair_window();
         else if (strcmp(argv[1], "forget-all-confirm") == 0) test_forget_all_cancels_pair_confirm();
         else if (strcmp(argv[1], "forget-candidate") == 0) test_forget_cancels_matching_candidate();
+        else if (strcmp(argv[1], "full-repair") == 0) test_full_table_allows_bonded_repair();
         else return 2;
         return 0;
     }
@@ -667,6 +720,7 @@ int main(int argc, char **argv) {
     test_v4_pair_request_is_ignored();
     test_legacy_format2_blob_still_loads();
     test_storage_error_leaves_saved_bonds_unchanged();
+    test_full_table_allows_bonded_repair();
     printf("sl2_pair_v5: all tests passed\n");
     return 0;
 }

@@ -43,4 +43,25 @@ int main(int, char** argv) {
  CASE("legacy_auto_single_target_is_not_temporarily_accepted") {
   cmd.set_dc=290;CHECK(!h_apply(nullptr,SL2_CM_TEMP,&cmd));CHECK(c.getEffectiveState().targetTemp!=29);
  }
+ CASE("legacy_unit_half_degree_threshold_sends_once") {
+  pump.legacy=true;pump.roomRaw=164;c._tempMode=false;settings.get().heatingThreshold=20.5f;
+  ticks(c,300,10);CHECK(c.getEffectiveState().roomTemp==18);
+  int sets0=pump.sets,sets1=-1,infos1=0;
+  for(int t=0;t<60000;t+=10){
+   if(t%2000==0){run_auto_sync(c);if(sets1<0&&pump.sets>sets0){sets1=pump.sets;infos1=pump.infos;}}
+   c.loop();now_ms+=10;
+  }
+  CHECK(sets1==sets0+1);CHECK(pump.sets==sets1);CHECK(pump.infos>infos1);CHECK(pump.legacyC==20);
+ }
+ CASE("legacy_unit_confirms_truncated_target") {
+  pump.legacy=true;pump.roomRaw=164;c._tempMode=false;settings.get().heatingThreshold=20.5f;
+  ticks(c,300,10);run_auto_sync(c);ticks(c,300,10);
+  CHECK(pump.legacyC==20);CHECK(c.getEffectiveState().targetTemp==20);CHECK(!c._wanted.hasTemp);
+ }
+ CASE("enhanced_unit_half_degree_unchanged") {
+  pump.roomRaw=164;settings.get().heatingThreshold=20.5f;CHECK(c._tempMode);
+  ticks(c,300,10);int sets0=pump.sets;
+  for(int t=0;t<60000;t+=10){if(t%2000==0)run_auto_sync(c);c.loop();now_ms+=10;}
+  CHECK(pump.sets==sets0+1);CHECK(pump.target==(uint8_t)(20.5f*2+128));CHECK(c.getEffectiveState().targetTemp==20.5f);
+ }
 }

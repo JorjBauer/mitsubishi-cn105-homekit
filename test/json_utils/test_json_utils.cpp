@@ -94,6 +94,29 @@ int main() {
     assert(!jsonHasKey("{}", "a"));
     checks += 6;
 
+    // Non-finite and out-of-range numbers must read as "not a number" so no
+    // caller's clamp ever sees NaN (std::clamp passes NaN straight through).
+    {
+        float f = 7.0f;
+        assert(!jsonGetFloat("{\"t\":nan}", "t", &f));
+        assert(!jsonGetFloat("{\"t\":NaN}", "t", &f));
+        assert(!jsonGetFloat("{\"t\":inf}", "t", &f));
+        assert(!jsonGetFloat("{\"t\":-inf}", "t", &f));
+        assert(!jsonGetFloat("{\"t\":Infinity}", "t", &f));
+        assert(!jsonGetFloat("{\"t\":1e999}", "t", &f));
+        assert(!jsonGetFloat("{\"t\":-1e999}", "t", &f));
+        assert(f == 7.0f);              // *out untouched on rejection
+        assert(jsonGetFloat("{\"t\":22.5}", "t", &f) && f == 22.5f);
+        assert(jsonGetFloat("{\"t\":-1.5e1}", "t", &f) && f == -15.0f);
+        checks += 9;
+        // The web_ws "set" handler gates the target on this return value, so a
+        // "target":nan frame leaves the target unchanged.
+        float target = 21.0f, v = 0;
+        if (jsonGetFloat("{\"cmd\":\"set\",\"target\":nan}", "target", &v)) target = v;
+        assert(target == 21.0f);
+        checks++;
+    }
+
     printf("json_utils: all %d checks passed\n", checks);
     return 0;
 }

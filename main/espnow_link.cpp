@@ -25,6 +25,7 @@
 #include <esp_app_desc.h>
 #include <esp_system.h>
 #include <nvs.h>
+#include <nvs_flash.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
 #include <sodium.h>
@@ -112,6 +113,50 @@ static volatile bool    s_reqPairCancel    = false;
 static volatile bool    s_reqForgetAll     = false;
 static volatile bool    s_reqForgetRestart = false;   // forget + LED + esp_restart()
 
+/* Per-dial forget mailbox (web forgetDial). A small set rather than one flag,
+ * so quick clicks on two dials both land; a repeat of a queued MAC is a no-op.
+ * Producers on any task, drained by loop(). */
+static portMUX_TYPE s_forgetMux = portMUX_INITIALIZER_UNLOCKED;
+static uint8_t      s_forgetMacs[SL2_MAX_DIALS][6];
+static int          s_forgetCount = 0;
+
+static bool queue_forget_dial(const uint8_t mac[6]) {
+    bool queued = true;
+    portENTER_CRITICAL(&s_forgetMux);
+    int i = 0;
+    while (i < s_forgetCount && memcmp(s_forgetMacs[i], mac, 6) != 0) i++;
+    if (i == s_forgetCount) {
+        if (s_forgetCount < SL2_MAX_DIALS) memcpy(s_forgetMacs[s_forgetCount++], mac, 6);
+        else queued = false;
+    }
+    portEXIT_CRITICAL(&s_forgetMux);
+    return queued;
+}
+
+/* Main task. The bond, the radio peer and the dial's room reading go
+ * together; a Link pin on that dial is repaired by
+ * room_source_reconcile_catalog() on its next pass. No restart, unlike
+ * forget-all: the remaining dials keep running. */
+static void drain_forget_dials(void) {
+    uint8_t macs[SL2_MAX_DIALS][6];
+    portENTER_CRITICAL(&s_forgetMux);
+    const int n = s_forgetCount;
+    memcpy(macs, s_forgetMacs, sizeof macs);
+    s_forgetCount = 0;
+    portEXIT_CRITICAL(&s_forgetMux);
+    for (int i = 0; i < n; i++) {
+        const uint8_t *m = macs[i];
+        if (!sl2_link_forget_dial(&s_link, m)) {
+            LOG_WARN("Serin Link: dial %02X:%02X:%02X:%02X:%02X:%02X not forgotten",
+                     m[0], m[1], m[2], m[3], m[4], m[5]);
+            continue;
+        }
+        LinkSensor::forget(m);
+        LOG_INFO("Serin Link: forgot dial %02X:%02X:%02X:%02X:%02X:%02X",
+                 m[0], m[1], m[2], m[3], m[4], m[5]);
+    }
+}
+
 /* Status snapshot, refreshed by loop() on the main task. The web (httpd) and
  * console tasks read this adapter-owned copy instead of calling into the core,
  * so the single-context contract holds for reads as well as writes (no
@@ -124,6 +169,8 @@ struct LinkStatus {
     uint8_t mac0[6] = {};
     int     dialCount = 0;
     uint8_t dialMac[SL2_MAX_DIALS][6] = {};
+    bool    dialLive[SL2_MAX_DIALS] = {};
+    int32_t dialSeenSec[SL2_MAX_DIALS] = {};
     /* Interned literal from the core (sl2_link.c only ever assigns string
      * constants) — a single aligned pointer store is tear-free for the
      * httpd/console reader tasks, unlike a byte-wise buffer copy. */
@@ -221,6 +268,32 @@ static bool p_kv_set(void *, const char *key, const void *buf, size_t len) {
     if (nvs_open(SL2_NVS_NS, NVS_READWRITE, &h) != ESP_OK) return false;
     bool ok = nvs_set_blob(h, key, buf, len) == ESP_OK && nvs_commit(h) == ESP_OK;
     nvs_close(h);
+    return ok;
+}
+
+/* Factory reset erases every namespace, then writes the unit's Link identity
+ * back. Each dial pins that public key at pairing, so a freshly generated one
+ * would make every dial refuse to re-pair ("pin-mismatch") until the dial
+ * itself was reset. The bonds are still erased. Runs on the httpd task just
+ * before esp_restart(); NVS is left deinitialized, as a plain erase leaves it,
+ * so nothing else lands in the fresh partition before the restart. */
+bool espnow_factory_erase_nvs(void) {
+    uint8_t id[SL2_ED25519_PRIV + SL2_ED25519_PUB];
+    size_t len = sizeof id;
+    const bool keep = p_kv_get(nullptr, SL2_KV_IDENTITY, id, &len) && len == sizeof id;
+    // nvs_flash_erase() closes every handle and deinits the partition itself.
+    if (nvs_flash_erase() != ESP_OK) {
+        sodium_memzero(id, sizeof id);
+        LOG_ERROR("Factory reset: NVS erase failed");
+        return false;
+    }
+    if (!keep) return true;
+    const bool ok = nvs_flash_init() == ESP_OK &&
+                    p_kv_set(nullptr, SL2_KV_IDENTITY, id, sizeof id);
+    nvs_flash_deinit();
+    sodium_memzero(id, sizeof id);
+    if (!ok) LOG_ERROR("Factory reset: Serin Link identity not restored — paired "
+                       "dials must be reset before they can pair again");
     return ok;
 }
 
@@ -552,19 +625,17 @@ static bool h_apply(void *, uint16_t mask, const struct sl2_cmd_pkt *cmd) {
 
 /* A bonded dial reported its own sensor (reading, and optionally a source
  * edit). Always feed the reading — even when it isn't the selected source —
- * so LinkSensor's freshness/status tracking stays live for a source switch
- * later. The edit is separate: is_edit is only true for a long-enough frame
- * carrying something other than the NOEDIT sentinel (core-verified, see
+ * so LinkSensor's per-dial freshness/status tracking stays live for a source
+ * switch later. The edit is separate: is_edit is only true for a long-enough
+ * frame carrying something other than the NOEDIT sentinel (core-verified, see
  * sl2_link.h), but the VALUE still needs validating here — it crossed the
  * air. RoomAvg::legacySrcSelectable() is the same test the web UI applies:
  * it rejects anything past the three known sources, and BLE when no slot is
  * configured. LINK is deliberately NOT judged through legacySrcSelectable(),
- * whose LINK case reads the global LinkSensor::hasSensor() flag — once a pin
- * is in place, feed() above only updates that flag from frames matching the
- * CURRENT pin (see feed()'s per-dial filter), so it can be stale for any
- * other dial. A second, sensorless dial asking to pin itself would then be
- * judged against the pinned dial's flag, not its own. So for LINK this
- * checks THIS packet's own SL2_DSF_HAS_SENSOR bit instead. */
+ * whose LINK case reads LinkSensor::hasSensor() — true when ANY dial has
+ * sensing hardware. A sensorless dial asking to pin itself would pass on
+ * another dial's capability. So for LINK this checks THIS packet's own
+ * SL2_DSF_HAS_SENSOR bit instead. */
 static void h_room_sensor(void *, const uint8_t src_mac[6],
                           const struct sl2_dial_sensor_pkt *p, bool is_edit) {
     LinkSensor::feed(src_mac, p);
@@ -583,11 +654,6 @@ static void h_room_sensor(void *, const uint8_t src_mac[6],
         st.roomSingle   = single;
         st.roomSourceId = pin;   // a pre-catalog "Link" edit means "use me"
         settings.save();         // re-derives roomSource; keeps a NS_LINK pin
-        // The feed above ran before the pin moved, so if a DIFFERENT dial
-        // held the old pin, feed()'s per-dial filter discarded this frame's
-        // reading. Re-feed now that this dial's pin is in effect, so the
-        // edit doesn't read UNAVAILABLE until its next ~3 Hz retry.
-        LinkSensor::feed(src_mac, p);
         LOG_INFO("room source -> %u (set from dial)", (unsigned)p->want_src);
     }
 }
@@ -1041,11 +1107,14 @@ static void snapshot_status(void) {
     s_stat.secsLeft = sl2_link_pair_seconds_left(&s_link);
     if (!sl2_link_dial_mac(&s_link, 0, s_stat.mac0)) memset(s_stat.mac0, 0, 6);
     s_stat.dialCount = sl2_link_dial_count(&s_link);
+    sl2_dial_view_t dv;
     for (int i = 0; i < SL2_MAX_DIALS; i++) {
         if (!sl2_link_dial_mac(&s_link, i, s_stat.dialMac[i]))
             memset(s_stat.dialMac[i], 0, 6);
+        const bool have = sl2_link_dial_view(&s_link, i, &dv);
+        s_stat.dialLive[i] = have && dv.live;
+        s_stat.dialSeenSec[i] = (!have || dv.last_seen_ms < 0) ? -1 : dv.last_seen_ms / 1000;
     }
-    sl2_dial_view_t dv;
     if (sl2_link_dial_view(&s_link, 0, &dv)) {
         s_stat.lastSeenSec = dv.last_seen_ms < 0 ? -1 : (dv.last_seen_ms / 1000);
         s_stat.rssi = rssi_for(dv.mac);
@@ -1155,8 +1224,12 @@ void EspnowLink::loop() {
      * and the bond table is untouched, so the Link room source stays too. */
     if (s_reqForgetAll) {
         s_reqForgetAll = false;
-        if (sl2_link_forget_all(&s_link)) room_source_drop_link();
+        if (sl2_link_forget_all(&s_link)) {
+            LinkSensor::forget(nullptr);
+            room_source_drop_link();
+        }
     }
+    drain_forget_dials();
     if (s_reqPairStart)  { s_reqPairStart = false;  sl2_link_pair_start(&s_link, PAIR_WINDOW_S * 1000); }
     if (s_reqPairCancel) { s_reqPairCancel = false; sl2_link_pair_cancel(&s_link); }
     if (s_reqForgetRestart) {
@@ -1207,6 +1280,7 @@ void EspnowLink::loop() {
     snapshot_status();
 }
 
+bool EspnowLink::isStarted() const { return s_started; }
 bool EspnowLink::isBonded() const { return s_stat.bonded; }
 bool EspnowLink::isPeerLive() const { return s_stat.live; }
 void EspnowLink::getPeerMac(uint8_t out[6]) const { memcpy(out, s_stat.mac0, 6); }
@@ -1215,6 +1289,20 @@ bool EspnowLink::bondedDialMac(int slot, uint8_t mac[6]) const {
     if (slot < 0 || slot >= SL2_MAX_DIALS || slot >= s_stat.dialCount) return false;
     memcpy(mac, s_stat.dialMac[slot], 6);
     return true;
+}
+bool EspnowLink::bondedDial(int slot, EspnowDialRow &out) const {
+    if (slot < 0 || slot >= SL2_MAX_DIALS || slot >= s_stat.dialCount) return false;
+    memcpy(out.mac, s_stat.dialMac[slot], 6);
+    out.live = s_stat.dialLive[slot];
+    out.lastSeenSec = s_stat.dialSeenSec[slot];
+    return true;
+}
+bool EspnowLink::forgetDial(const uint8_t mac[6]) {
+    if (!s_started) return false;
+    bool bonded = false;
+    for (int i = 0; i < s_stat.dialCount && i < SL2_MAX_DIALS && !bonded; i++)
+        bonded = memcmp(s_stat.dialMac[i], mac, 6) == 0;
+    return bonded && queue_forget_dial(mac);
 }
 bool EspnowLink::getDialDetail(EspnowDialDetail &out) const {
     if (!s_stat.bonded) return false;
@@ -1304,15 +1392,19 @@ void espnow_register_console(void) {
 
 #else  // ESPNOW_REMOTE_ENABLE == 0
 #include <esp_system.h>
+#include <nvs_flash.h>
 #include "sl2_proto.h"   // SL2_ROOMST_OK — dependency-free, safe without the rest of this TU
 EspnowLink espnowLink;
 void EspnowLink::begin(CN105Controller *) {}
 void EspnowLink::loop() {}
+bool EspnowLink::isStarted() const { return false; }
 bool EspnowLink::isBonded() const { return false; }
 bool EspnowLink::isPeerLive() const { return false; }
 void EspnowLink::getPeerMac(uint8_t out[6]) const { for (int i = 0; i < 6; i++) out[i] = 0; }
 int EspnowLink::bondedDialCount() const { return 0; }
 bool EspnowLink::bondedDialMac(int slot, uint8_t mac[6]) const { (void)slot; (void)mac; return false; }
+bool EspnowLink::bondedDial(int slot, EspnowDialRow &out) const { (void)slot; (void)out; return false; }
+bool EspnowLink::forgetDial(const uint8_t mac[6]) { (void)mac; return false; }
 bool EspnowLink::getDialDetail(EspnowDialDetail &out) const { (void)out; return false; }
 // Simplified default, matching every other query on this stub facade: no
 // link means Link can never be the selected source, so Internal — always
@@ -1327,4 +1419,5 @@ EspnowPairOutcome EspnowLink::pairOutcome() const { return ESPNOW_PAIR_NONE; }
 void espnow_register_console(void) {}
 bool espnow_console_started(void) { return false; }
 void espnow_forget_and_restart(void) { esp_restart(); }
+bool espnow_factory_erase_nvs(void) { return nvs_flash_erase() == ESP_OK; }   // no Link identity to keep
 #endif

@@ -221,6 +221,10 @@ input[type=range].slim::-moz-range-thumb{width:22px;height:22px;}
 .status-item>span.src-badge{font-size:10.5px;font-weight:600;color:#fff;margin-top:0;display:inline-flex;align-items:center;}
 .status-item>span.id-val{display:flex;align-items:center;gap:5px;}
 .status-item>span.id-val svg{width:12px;height:12px;flex:none;}
+/* Per-dial rows (two or more Links paired), each with its own Forget. */
+.dial-list{display:flex;flex-direction:column;gap:8px;margin-top:8px;}
+.status-item.dial-row{display:flex;align-items:center;justify-content:space-between;gap:12px;}
+.dial-row .btn-danger{padding:8px 14px;}
 
 /* ===== iOS switch (#bleEnableToggle) ===== */
 .ios-toggle{position:relative;display:inline-block;width:51px;height:31px;flex:none;}
@@ -832,6 +836,7 @@ a:focus-visible,button:focus-visible,input:focus-visible,select:focus-visible{ou
       <div class="stack-tight" style="flex:1;min-width:0">
         <div class="t">Paired with HomeKit</div>
         <div class="b" id="hkControllers">--</div>
+        <div class="b" id="hkSetupHidden" style="display:none">Setup code hidden after pairing. Reset HomeKit pairing to show it.</div>
       </div>
       <button class="btn-secondary grow0" id="hkShowSetupBtn">Show Setup Code</button>
     </div>
@@ -897,6 +902,9 @@ a:focus-visible,button:focus-visible,input:focus-visible,select:focus-visible{ou
           <span class="id-val" id="remoteIdVal">—</span>
         </div>
       </div>
+      <!-- Every paired Link, once there are two or more: each row's Forget
+           removes that dial only, without a restart. -->
+      <div class="dial-list" id="remoteDialList" style="display:none"></div>
     </div>
     <!-- Night dimming lives with the device it configures: hidden until a
          Serin Link is bonded (s.remoteBonded), so dial-less installs never
@@ -1192,11 +1200,16 @@ a:focus-visible,button:focus-visible,input:focus-visible,select:focus-visible{ou
   // so the first few status pushes carry no model. Hold the neutral title for a
   // grace window instead of flashing "Model unknown" at every new pairing.
   var linkInfoWaitAt=0;
+  var remoteDialCount=0;   // rows in the per-dial list (0 when hidden)
   var LINK_INFO_GRACE_MS=15000;
   // Single renderer for the pairing hero's collapsed/expanded state — used by
   // both the state push and the toggle button so the two can't drift.
   function renderHkSetupToggle(){
     $('hkPairing').style.display=(hkPairedNow&&!hkSetupExpanded)?'none':'';
+    // The firmware stops sending the setup code once paired, so there is
+    // nothing to reveal: say so instead of offering an empty panel.
+    $('hkShowSetupBtn').style.display=hkPairedNow?'none':'';
+    $('hkSetupHidden').style.display=hkPairedNow?'':'none';
     $('hkShowSetupBtn').textContent=hkSetupExpanded?'Hide Setup Code':'Show Setup Code';
   }
 
@@ -2362,6 +2375,9 @@ a:focus-visible,button:focus-visible,input:focus-visible,select:focus-visible{ou
       if(s.hkSetupURI&&s.hkSetupURI!==lastQRURI){
         lastQRURI=s.hkSetupURI;
         renderQR(s.hkSetupURI,qrCanvas);
+      }else if(!s.hkSetupURI&&lastQRURI){
+        lastQRURI='';
+        qrCanvas.getContext('2d').clearRect(0,0,qrCanvas.width,qrCanvas.height);
       }
       $('hkButtons').style.display=(lastQRURI&&hkAppleUA)?'flex':'none';
     }
@@ -2440,10 +2456,19 @@ a:focus-visible,button:focus-visible,input:focus-visible,select:focus-visible{ou
         }
       }
 
+      var dials=linkDialList(s),dList=$('remoteDialList');
+      remoteDialCount=dials.length;
+      dList.style.display=dials.length?'':'none';
+      setHtml(dList,dials.map(linkDialRowHtml).join(''));
+
       var pairing=s.remotePairing===true;
-      $('pairRemoteBtn').style.display=(pairing||bonded)?'none':'';
+      var pairLabel=linkPairLabel(s),pairBtn=$('pairRemoteBtn');
+      pairBtn.style.display=pairLabel?'':'none';
+      if(pairLabel)pairBtn.textContent=pairLabel;
       $('cancelPairBtn').style.display=pairing?'':'none';
       $('forgetRemoteBtn').style.display=bonded?'':'none';
+      // With the per-dial list showing, the card's own button is forget-all.
+      $('forgetRemoteBtn').textContent=dials.length?'Forget All':'Forget';
       // Unpaired the header's own 14px bottom margin is the only gap needed;
       // paired, the button sits 14px under the tile grid.
       $('remotePairRow').style.marginTop=bonded?'14px':'0';
@@ -2490,6 +2515,36 @@ a:focus-visible,button:focus-visible,input:focus-visible,select:focus-visible{ou
     return Math.floor(sec/3600)+'h';
   }
   function fmtAgo(sec){ return fmtSpan(sec)+' ago'; }
+  // ── linkDials:start
+  // The Link card's per-dial list. Two or more bonded dials only: with one,
+  // the card header already is that dial. A frame whose remoteDials section
+  // was rolled back renders no list rather than an empty one.
+  function linkDialList(s){
+    var d=Array.isArray(s.remoteDials)?s.remoteDials:[];
+    return s.remoteBonded===true&&d.length>1?d:[];
+  }
+  function linkDialRowHtml(d){
+    var st=d.live?'Live'+(d.t!=null?' · '+fmtReadingTemp(d.t)+'°':'')
+          :d.seen<0?'Not seen yet':'Seen '+fmtAgo(d.seen);
+    return '<div class="status-item dial-row"><div style="min-width:0">'+
+      '<span class="status-label">'+escHtml(st)+'</span>'+
+      '<span class="item-val mono">'+escHtml(d.mac)+'</span></div>'+
+      '<button type="button" class="btn-danger grow0" data-mac="'+escHtml(d.mac)+'"'+
+      ' aria-label="Forget Link '+escHtml(d.mac)+'">Forget</button></div>';
+  }
+  var LINK_MAX_DIALS=4;   // SL2_MAX_DIALS (main/sl2_bond.h); test/web_link_dials pins it
+  // The Pair button's label, or null to hide it: always before the first
+  // dial, then while the bond table has room. Hidden while a window is open,
+  // and when the dial count is missing from the frame.
+  function linkPairLabel(s){
+    if(s.remotePairing===true)return null;
+    if(s.remoteBonded!==true)return 'Pair';
+    var n=Array.isArray(s.remoteDials)?s.remoteDials.length:LINK_MAX_DIALS;
+    return n<LINK_MAX_DIALS?'Pair another Link':null;
+  }
+  // One dial only, no restart (forgetRemote is the forget-all path).
+  function forgetDialCmd(mac){return {cmd:'forgetDial',mac:mac}}
+  // ── linkDials:end
   function fmtUptime(sec){
     var h=Math.floor(sec/3600);
     var m=Math.floor((sec%3600)/60);
@@ -3743,16 +3798,25 @@ a:focus-visible,button:focus-visible,input:focus-visible,select:focus-visible{ou
     }).catch(function(e){showToast('Import failed: '+(e.message||e),true)});
   };
 
+  // Destructive commands need a typed word; the firmware refuses the frame
+  // without it (there is no LAN authentication, so a bare command is not
+  // proof of intent).
+  function typedConfirm(text,word,what){
+    var v=prompt(text+'\n\nType '+word+' to confirm:');
+    if(v===null) return false;
+    if(v.trim().toUpperCase()!==word){showToast(what+' cancelled',true);return false}
+    return true;
+  }
+
   window.factoryReset=function(){
     if(!ensureConnected()) return;
-    var v=prompt('This erases ALL settings, Wi-Fi credentials, and HomeKit pairing, then restarts the device into setup mode.\n\nType ERASE to confirm:');
-    if(v===null) return;
-    if(v.trim().toUpperCase()!=='ERASE'){showToast('Factory reset cancelled',true);return}
+    if(!typedConfirm('This erases ALL settings, Wi-Fi credentials, and HomeKit pairing, then restarts the device into setup mode.','ERASE','Factory reset')) return;
     send({cmd:'factoryReset',confirm:'ERASE'});
   };
 
   window.restartDevice=function(){
-    if(confirm('Restart the device?')){send({cmd:'restart'})}
+    if(!ensureConnected()) return;
+    if(typedConfirm('Restart the device?','RESTART','Restart')){send({cmd:'restart',confirm:'RESTART'})}
   };
 
   window.identifyDevice=function(){
@@ -3760,15 +3824,16 @@ a:focus-visible,button:focus-visible,input:focus-visible,select:focus-visible{ou
   };
 
   window.resetHomeKit=function(){
-    if(confirm('This will remove all HomeKit pairings. You will need to re-pair in the Home app. Continue?')){
-      send({cmd:'hkReset'});
+    if(!ensureConnected()) return;
+    if(typedConfirm('This will remove all HomeKit pairings. You will need to re-pair in the Home app.','RESET','HomeKit reset')){
+      send({cmd:'hkReset',confirm:'RESET'});
     }
   };
 
   window.forgetWifi=function(){
     if(!ensureConnected()) return;
-    if(confirm('Forget the saved Wi-Fi network and restart into setup mode?\n\nHomeKit pairing and all other settings are kept.')){
-      send({cmd:'wifiForget'});
+    if(typedConfirm('Forget the saved Wi-Fi network and restart into setup mode?\n\nHomeKit pairing and all other settings are kept.','FORGET','Forget Wi-Fi')){
+      send({cmd:'wifiForget',confirm:'FORGET'});
     }
   };
 
@@ -3781,8 +3846,18 @@ a:focus-visible,button:focus-visible,input:focus-visible,select:focus-visible{ou
   var hkAppleUA=/iPhone|iPad|iPod|Macintosh/.test(navigator.userAgent);
 
   document.getElementById('forgetRemoteBtn').addEventListener('click',function(){
-    if(confirm('Forget the paired Link? The device will restart.')){
+    var msg=remoteDialCount?'Forget all '+remoteDialCount+' paired Links? The device will restart.'
+                           :'Forget the paired Link? The device will restart.';
+    if(confirm(msg)){
       send({cmd:'forgetRemote'});
+    }
+  });
+  document.getElementById('remoteDialList').addEventListener('click',function(e){
+    var b=e.target.closest('button[data-mac]');
+    if(!b)return;
+    var mac=b.getAttribute('data-mac');
+    if(confirm('Forget the Link '+mac+'? The other paired Links stay paired.')){
+      send(forgetDialCmd(mac));
     }
   });
   document.getElementById('pairRemoteBtn').addEventListener('click',function(){

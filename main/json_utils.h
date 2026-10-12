@@ -5,6 +5,7 @@
 #include <cstdio>
 #include <cstdarg>
 #include <cctype>
+#include <cmath>
 
 // ════════════════════════════════════════════════════════════════════════════
 // Lightweight JSON parsing helpers (strstr-based, no external library)
@@ -95,7 +96,9 @@ inline bool jsonGetString(const char *json, const char *key, char *buf, size_t b
     return *p == '"';                  // false if the value was unterminated
 }
 
-// Extract a numeric (float) value for a given key from JSON.
+// Extract a numeric (float) value for a given key from JSON. Non-finite
+// results (nan, inf, or an exponent that overflows float) return false and
+// leave *out alone: strtof accepts them, and std::clamp passes NaN through.
 inline bool jsonGetFloat(const char *json, const char *key, float *out) {
     char pattern[64];
     snprintf(pattern, sizeof(pattern), "\"%s\":", key);
@@ -105,7 +108,7 @@ inline bool jsonGetFloat(const char *json, const char *key, float *out) {
     while (*p == ' ') p++;
     char *endp;
     float val = strtof(p, &endp);
-    if (endp == p) return false;
+    if (endp == p || !std::isfinite(val)) return false;
     *out = val;
     return true;
 }
