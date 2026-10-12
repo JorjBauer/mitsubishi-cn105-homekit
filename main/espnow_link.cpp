@@ -12,6 +12,7 @@
  * into an SPSC ring; loop() (main task) drains it into the core.
  */
 #include "espnow_link.h"
+#include "settings.h"
 
 #if ESPNOW_REMOTE_ENABLE
 
@@ -41,7 +42,6 @@
 #include "wifi_manager.h"
 #include "wifi_recovery.h"
 #include "homekit_setup.h"
-#include "settings.h"
 #include "status_led.h"
 #include "ble_config.h"
 #include "link_sensor.h"
@@ -264,6 +264,7 @@ static bool p_kv_get(void *, const char *key, void *buf, size_t *len) {
 }
 
 static bool p_kv_set(void *, const char *key, const void *buf, size_t len) {
+    if (settings.isFactoryResetting()) return false;
     nvs_handle_t h;
     if (nvs_open(SL2_NVS_NS, NVS_READWRITE, &h) != ESP_OK) return false;
     bool ok = nvs_set_blob(h, key, buf, len) == ESP_OK && nvs_commit(h) == ESP_OK;
@@ -276,8 +277,9 @@ static bool p_kv_set(void *, const char *key, const void *buf, size_t len) {
  * would make every dial refuse to re-pair ("pin-mismatch") until the dial
  * itself was reset. The bonds are still erased. Runs on the httpd task just
  * before esp_restart(); NVS is left deinitialized, as a plain erase leaves it,
- * so nothing else lands in the fresh partition before the restart. */
+ * and normal writers are blocked for the rest of this boot. */
 bool espnow_factory_erase_nvs(void) {
+    settings.beginFactoryReset();
     uint8_t id[SL2_ED25519_PRIV + SL2_ED25519_PUB];
     size_t len = sizeof id;
     const bool keep = p_kv_get(nullptr, SL2_KV_IDENTITY, id, &len) && len == sizeof id;
@@ -288,8 +290,15 @@ bool espnow_factory_erase_nvs(void) {
         return false;
     }
     if (!keep) return true;
-    const bool ok = nvs_flash_init() == ESP_OK &&
-                    p_kv_set(nullptr, SL2_KV_IDENTITY, id, sizeof id);
+    // Only this identity restore may bypass the normal-writer guard.
+    nvs_handle_t h;
+    bool ok = nvs_flash_init() == ESP_OK &&
+              nvs_open(SL2_NVS_NS, NVS_READWRITE, &h) == ESP_OK;
+    if (ok) {
+        ok = nvs_set_blob(h, SL2_KV_IDENTITY, id, sizeof id) == ESP_OK &&
+             nvs_commit(h) == ESP_OK;
+        nvs_close(h);
+    }
     nvs_flash_deinit();
     sodium_memzero(id, sizeof id);
     if (!ok) LOG_ERROR("Factory reset: Serin Link identity not restored — paired "
@@ -1419,5 +1428,8 @@ EspnowPairOutcome EspnowLink::pairOutcome() const { return ESPNOW_PAIR_NONE; }
 void espnow_register_console(void) {}
 bool espnow_console_started(void) { return false; }
 void espnow_forget_and_restart(void) { esp_restart(); }
-bool espnow_factory_erase_nvs(void) { return nvs_flash_erase() == ESP_OK; }   // no Link identity to keep
+bool espnow_factory_erase_nvs(void) {
+    settings.beginFactoryReset();
+    return nvs_flash_erase() == ESP_OK;   // no Link identity to keep
+}
 #endif

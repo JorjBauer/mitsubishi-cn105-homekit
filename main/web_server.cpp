@@ -111,6 +111,7 @@ static bool isApSubnetClient(httpd_req_t *req) {
 }
 
 esp_err_t WebUI::handleRoot(httpd_req_t *req) {
+    if (!requireSameOrigin(req)) return ESP_FAIL;
     // If AP fallback is active and the client is on the AP subnet, serve the
     // WiFi setup page instead of the main UI.
     if (webUI._apMode && isApSubnetClient(req)) {
@@ -122,6 +123,7 @@ esp_err_t WebUI::handleRoot(httpd_req_t *req) {
 }
 
 esp_err_t WebUI::handleRecoveryPage(httpd_req_t *req) {
+    if (!requireSameOrigin(req)) return ESP_FAIL;
     return sendGzipPage(req, recovery_html_gz_start,
                         (size_t)(recovery_html_gz_end - recovery_html_gz_start));
 }
@@ -150,10 +152,11 @@ static void serveCNAPage(httpd_req_t *req) {
     httpd_resp_sendstr(req, CNA_PAGE);
 }
 
-// Catch-all 404 handler installed only while the fallback AP is active. Serves
-// the captive-portal page to AP-subnet clients (triggers the OS popup); any
-// other client gets a normal 404 so the main UI behaves normally.
-static esp_err_t handleRedirect404(httpd_req_t *req, httpd_err_code_t) {
+// Catch-all 404 handler validates Host in both STA and recovery modes. Serves
+// the captive-portal page to AP-subnet clients using an allowed Host; any
+// other allowed client gets a normal 404 so the main UI behaves normally.
+esp_err_t WebUI::handleRedirect404(httpd_req_t *req, httpd_err_code_t) {
+    if (!requireSameOrigin(req)) return ESP_FAIL;
     if (webUI.isAPMode() && isApSubnetClient(req)) {
         serveCNAPage(req);
         return ESP_OK;
@@ -169,20 +172,26 @@ static esp_err_t handleRedirect404(httpd_req_t *req, httpd_err_code_t) {
 bool WebUI::requireSameOrigin(httpd_req_t *req) {
     char origin[128] = "", host[128] = "";
     size_t ol = httpd_req_get_hdr_value_len(req, "Origin");
-    if (ol == 0) return true;   // curl, native apps, same-origin without the header
     size_t hl = httpd_req_get_hdr_value_len(req, "Host");
-    bool ok = ol < sizeof(origin) && hl < sizeof(host) &&
-              httpd_req_get_hdr_value_str(req, "Origin", origin, sizeof(origin)) == ESP_OK &&
-              (hl == 0 || httpd_req_get_hdr_value_str(req, "Host", host, sizeof(host)) == ESP_OK) &&
+    char staIP[16] = "";
+    if (WifiManager::isConnected()) WifiManager::getIP(staIP, sizeof(staIP));
+    // main.cpp passes this same configured hostname to WiFi init and HAP's
+    // mDNS override. It is available during recovery before HAP starts.
+    const char *hostname = WifiManager::getHostname();
+    bool ok = ol < sizeof(origin) && hl > 0 && hl < sizeof(host) &&
+              (ol == 0 || httpd_req_get_hdr_value_str(req, "Origin", origin, sizeof(origin)) == ESP_OK) &&
+              httpd_req_get_hdr_value_str(req, "Host", host, sizeof(host)) == ESP_OK &&
+              webHostAllowed(host, staIP, hostname) &&
               webOriginAllowed(origin, host);
     if (!ok) {
-        LOG_WARN("Rejected cross-origin request to %s (Origin: %.60s)", req->uri, origin);
-        httpd_resp_send_err(req, HTTPD_403_FORBIDDEN, "Cross-origin request refused");
+        LOG_WARN("Rejected request to %s (Host: %.60s, Origin: %.60s)", req->uri, host, origin);
+        httpd_resp_send_err(req, HTTPD_403_FORBIDDEN, "Host or Origin refused");
     }
     return ok;
 }
 
 esp_err_t WebUI::handleWifiStatus(httpd_req_t *req) {
+    if (!requireSameOrigin(req)) return ESP_FAIL;
     // Load cached SSID from NVS
     char ssid[33] = "";
     char pass[65] = "";
@@ -217,7 +226,7 @@ esp_err_t WebUI::handleWifiStatus(httpd_req_t *req) {
         ",\"joined\":%s,\"trial\":\"%s\",\"hkSetupCode\":\"%s\"}",
         escSSID, escName, connected ? "true" : "false",
         joined ? "true" : "false", trial,
-        webHkSetupValue(true, homekit_get_controller_count(), homekit_get_setup_code()));
+        webHkSetupValue(true, homekit_get_controller_count(), homekit_get_setup_code(), settings.get().homekitPaired));
 
     httpd_resp_set_type(req, "application/json");
     httpd_resp_sendstr(req, buf);
@@ -225,6 +234,7 @@ esp_err_t WebUI::handleWifiStatus(httpd_req_t *req) {
 }
 
 esp_err_t WebUI::handleWifiScan(httpd_req_t *req) {
+    if (!requireSameOrigin(req)) return ESP_FAIL;
     WifiManager::ScannedNetwork networks[15];
     int count = WifiManager::scanNetworks(networks, 15);
 
@@ -329,8 +339,8 @@ esp_err_t WebUI::handleIdentify(httpd_req_t *req) {
 // ══════════════════════════════════════════════════════════════════════════════
 
 // The web UI now owns port 80, so the captive portal no longer needs a separate
-// server: while the fallback AP is active we install a catch-all 404 handler on
-// the main server that serves the captive-portal page to AP-subnet clients.
+// server: the main server's guarded catch-all 404 handler serves the
+// captive-portal page to AP-subnet clients while the fallback AP is active.
 // handleRoot already routes AP-subnet clients to the WiFi setup page.
 void WebUI::setAPMode(bool active) {
     if (active == _apMode) return;
@@ -340,12 +350,13 @@ void WebUI::setAPMode(bool active) {
 
 void WebUI::applyCaptivePortalHandler() {
     if (!_server) return;  // begin() re-applies this once the server is up
+    // Keep Host/Origin checks on unknown paths even outside recovery mode.
+    httpd_register_err_handler(_server, HTTPD_404_NOT_FOUND, handleRedirect404);
     if (_apMode) {
-        // Catch OS captive portal probes (/generate_204, /connecttest.txt, etc.)
-        httpd_register_err_handler(_server, HTTPD_404_NOT_FOUND, handleRedirect404);
+        // Catch unknown paths addressed to an allowed device Host. Foreign
+        // captive-probe hostnames are refused by the strict Host allowlist.
         LOG_INFO("Captive portal handler enabled (AP mode)");
     } else {
-        httpd_register_err_handler(_server, HTTPD_404_NOT_FOUND, NULL);
         LOG_INFO("Captive portal handler disabled");
     }
 }
@@ -367,6 +378,7 @@ static const char MANIFEST_JSON[] =
     "]}";
 
 esp_err_t WebUI::handleManifest(httpd_req_t *req) {
+    if (!requireSameOrigin(req)) return ESP_FAIL;
     if (sendNotModified(req)) return ESP_OK;
     httpd_resp_set_type(req, "application/manifest+json");
     httpd_resp_set_hdr(req, "Cache-Control", "public, max-age=86400");
@@ -376,6 +388,7 @@ esp_err_t WebUI::handleManifest(httpd_req_t *req) {
 }
 
 esp_err_t WebUI::handleIcon192(httpd_req_t *req) {
+    if (!requireSameOrigin(req)) return ESP_FAIL;
     if (sendNotModified(req)) return ESP_OK;
     httpd_resp_set_type(req, "image/png");
     httpd_resp_set_hdr(req, "Cache-Control", "public, max-age=86400");
@@ -386,6 +399,7 @@ esp_err_t WebUI::handleIcon192(httpd_req_t *req) {
 }
 
 esp_err_t WebUI::handleIcon512(httpd_req_t *req) {
+    if (!requireSameOrigin(req)) return ESP_FAIL;
     if (sendNotModified(req)) return ESP_OK;
     httpd_resp_set_type(req, "image/png");
     httpd_resp_set_hdr(req, "Cache-Control", "public, max-age=86400");
@@ -396,6 +410,7 @@ esp_err_t WebUI::handleIcon512(httpd_req_t *req) {
 }
 
 esp_err_t WebUI::handleFavicon(httpd_req_t *req) {
+    if (!requireSameOrigin(req)) return ESP_FAIL;
     if (sendNotModified(req)) return ESP_OK;
     httpd_resp_set_type(req, "image/png");
     httpd_resp_set_hdr(req, "Cache-Control", "public, max-age=86400");

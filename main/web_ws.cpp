@@ -44,8 +44,8 @@ static constexpr uint32_t WS_LOG_RESUME_HEAP = 70 * 1024;
 // WebSocket handler: GET /ws
 // ══════════════════════════════════════════════════════════════════════════════
 
-// Cross-site WebSocket hijacking: browsers attach Origin to the upgrade and
-// nothing else stops a foreign page driving this socket. Runs before the 101
+// Host allowlisting and same-host Origin checking prevent DNS rebinding and
+// cross-site WebSocket hijacking. Runs before the 101
 // response, so a refusal is a plain HTTP 403 and no upgrade happens.
 esp_err_t WebUI::wsPreHandshake(httpd_req_t *req) {
     return requireSameOrigin(req) ? ESP_OK : ESP_FAIL;
@@ -54,7 +54,7 @@ esp_err_t WebUI::wsPreHandshake(httpd_req_t *req) {
 esp_err_t WebUI::handleWebSocket(httpd_req_t *req) {
     // On first call (handshake), req->method == HTTP_GET
     if (req->method == HTTP_GET) {
-        // The Origin check already ran in wsPreHandshake, before the 101.
+        // The Host/Origin check already ran in wsPreHandshake, before the 101.
         int fd = httpd_req_to_sockfd(req);
 
         // All WS writes (including SDK control frames) run on httpd. Retire
@@ -605,13 +605,9 @@ void WebUI::handleWsMessage(httpd_req_t *req, const char *msg) {
         sendWsText(httpd_req_to_sockfd(req),
                    "{\"type\":\"info\",\"msg\":\"Factory reset — erasing all settings and restarting...\"}");
         vTaskDelay(pdMS_TO_TICKS(300));   // let the frame flush
-        // nvs_flash_erase() closes every handle and deinits the partition
-        // itself (nvs_api.cpp runs close_handles_and_deinit before erasing),
-        // so an explicit nvs_flash_deinit() bought nothing here: it does not
-        // wait for concurrent users, it only freed the Storage object under a
-        // settings.save() / eventlog_append() / HAP pairing write that little
-        // bit sooner. The erase keeps only the unit's Serin Link identity,
-        // so dials that pinned it can pair again.
+        // The erase owner latches the normal-writer guard before erasing.
+        // It restores only the unit's Serin Link identity, so dials that
+        // pinned it can pair again, then leaves NVS deinitialized.
         espnow_factory_erase_nvs();
         esp_restart();
 
@@ -660,6 +656,11 @@ void WebUI::handleWsMessage(httpd_req_t *req, const char *msg) {
         esp_restart();
 
     } else if (strcmp(cmd, "forgetRemote") == 0) {
+        if (!webConfirmed(msg, "FORGET")) {
+            sendWsText(httpd_req_to_sockfd(req),
+                       "{\"type\":\"error\",\"msg\":\"Remote forget not confirmed\"}");
+            return;
+        }
         LOG_WARN("ESP-NOW remote forget requested");
         sendWsText(httpd_req_to_sockfd(req), "{\"type\":\"info\",\"msg\":\"Forgetting remote...\"}");
         espnow_forget_and_restart();
@@ -1010,11 +1011,11 @@ void WebUI::pushState() {
         (int)cfg.modeMask,
         (int)(hkReady ? homekit_get_boot_mode_mask() : cfg.modeMask),
         hkReady ? "true" : "false",
-        (hkReady && hkControllers > 0) ? "true" : "false",
+        (cfg.homekitPaired || hkControllers > 0) ? "true" : "false",
         hkControllers,
         homekit_get_status_string(),
-        webHkSetupValue(hkReady, hkControllers, homekit_get_setup_code()),
-        webHkSetupValue(hkReady, hkControllers, homekit_get_setup_payload())
+        webHkSetupValue(hkReady, hkControllers, homekit_get_setup_code(), cfg.homekitPaired),
+        webHkSetupValue(hkReady, hkControllers, homekit_get_setup_payload(), cfg.homekitPaired)
     );
     section();
 

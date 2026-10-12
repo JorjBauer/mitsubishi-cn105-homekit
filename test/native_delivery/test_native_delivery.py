@@ -216,38 +216,56 @@ AUTO += "\n" + block(thermo, thermo.index("struct AutoTarget")) + ";\n" + functi
 AUTO += "\nstatic void run_auto_sync(CN105Controller& cn105){const CN105State s=cn105.getEffectiveState();\n"
 AUTO += block(thermo, thermo.index("    if (s.power && s.mode == CN105_MODE_AUTO)")) + "\n}\n" + PUMP
 
-# Factory reset against an in-memory NVS: erase wipes every namespace and
-# deinitializes, the way nvs_flash_erase() does on the device.
-FACTORY = HOST + r'''
-#include <map>
-#include <string>
+# H2 compiles SettingsStore and HomeKit setup intact against NVS/HAP boundaries.
+# The reset stub queues work: storage completion is delivered separately.
+HOMEKIT = HOST + (HERE / "homekit_stubs.inc").read_text()
+HOMEKIT += "\n" + clean("settings.h") + "\n" + clean("settings.cpp").replace('static const char *TAG', 'static const char *settings_TAG')
+HOMEKIT += "\n" + clean("homekit_setup.h") + "\n" + clean("homekit_setup.cpp")
+HOMEKIT += '\n#include "web_security.h"\n'
+
+# Factory reset uses the same NVS stub and real settings/HomeKit paths as H2.
+# Callbacks model main-loop writes at erase entry and during identity restore.
+FACTORY = HOMEKIT + r'''
 #include "sl2_link.h"
-using esp_err_t=int;using nvs_handle_t=uint32_t;
-enum nvs_open_mode_t{NVS_READONLY,NVS_READWRITE};
-constexpr esp_err_t ESP_OK=0,ESP_ERR_NVS_NOT_INITIALIZED=0x1101,ESP_ERR_NVS_NOT_FOUND=0x1102,
- ESP_ERR_NVS_INVALID_LENGTH=0x110c;
-struct FakeNvs{bool init=true;int erases=0,inits=0,deinits=0;
- std::map<std::string,std::map<std::string,std::vector<uint8_t>>> ns;std::vector<std::string> handles;}nvs;
-static esp_err_t nvs_open(const char* name,nvs_open_mode_t,nvs_handle_t* h){
- if(!nvs.init)return ESP_ERR_NVS_NOT_INITIALIZED;nvs.handles.push_back(name);*h=nvs.handles.size();return ESP_OK;}
-static void nvs_close(nvs_handle_t){}
-static esp_err_t nvs_get_blob(nvs_handle_t h,const char* key,void* out,size_t* len){
- auto& m=nvs.ns[nvs.handles[h-1]];auto it=m.find(key);if(it==m.end())return ESP_ERR_NVS_NOT_FOUND;
- if(*len<it->second.size())return ESP_ERR_NVS_INVALID_LENGTH;
- memcpy(out,it->second.data(),it->second.size());*len=it->second.size();return ESP_OK;}
-static esp_err_t nvs_set_blob(nvs_handle_t h,const char* key,const void* v,size_t len){
- if(!nvs.init)return ESP_ERR_NVS_NOT_INITIALIZED;auto b=(const uint8_t*)v;
- nvs.ns[nvs.handles[h-1]][key].assign(b,b+len);return ESP_OK;}
-static esp_err_t nvs_commit(nvs_handle_t){return nvs.init?ESP_OK:ESP_ERR_NVS_NOT_INITIALIZED;}
-static esp_err_t nvs_flash_erase(){nvs.ns.clear();nvs.init=false;++nvs.erases;return ESP_OK;}
-static esp_err_t nvs_flash_init(){nvs.init=true;++nvs.inits;return ESP_OK;}
-static esp_err_t nvs_flash_deinit(){nvs.init=false;++nvs.deinits;return ESP_OK;}
+#include "event_ring.h"
 static void sodium_memzero(void* b,size_t n){memset(b,0,n);}
 ''' + re.search(r'^static const char \*SL2_NVS_NS = "[^"]+";', adapter, re.M).group(0)
 FACTORY += "\n" + "\n".join(function(adapter, n) for n in ["p_kv_get", "p_kv_set", "espnow_factory_erase_nvs"])
+FACTORY += r'''
+namespace Events {
+static nvs_handle_t s_nvs=0;
+static constexpr const char* KEY_RING="ring";
+static EventBlob s_blob{};
+''' + function((MAIN / "event_log.cpp").read_text(), "persistLocked") + "\n}\n"
+wifi = (MAIN / "wifi_manager.cpp").read_text()
+FACTORY += "\nnamespace WifiManager {void saveCredentials(const char*,const char*);void eraseCredentials();}\n"
+FACTORY += wifi[wifi.index("static constexpr const char* NVS_NAMESPACE"):wifi.index("// ── Event group bits")]
+FACTORY += "\nstatic int8_t s_haveCreds=-1;\n" + "\n".join(function(wifi, n) for n in
+    ["WifiManager::saveCredentials", "WifiManager::eraseCredentials"])
 
-SOURCES = {"cn105_polling": CN105 + PUMP, "link_source": LINK, "ble_handoff": BLE, "auto_band": AUTO,
-           "factory_reset": FACTORY}
+# Compile the shipped HTTP and WS serialization expressions, not copies of
+# their security policy. Only their buffer append boundary is a host stub.
+HOMEKIT += r'''
+#include <cstdarg>
+static void stateAppend(char*buf,size_t cap,int*n,int*want,const char*fmt,...){
+ va_list ap;va_start(ap,fmt);int wrote=vsnprintf(buf+*n,cap-*n,fmt,ap);va_end(ap);*n+=wrote;*want+=wrote;}
+static std::string httpSetup(){
+ const char*escSSID="",*escName="Test",*trial="idle";bool connected=false,joined=false;
+'''
+http = (MAIN / "web_server.cpp").read_text()
+start = http.index('    char buf[340];')
+HOMEKIT += http[start:http.index('    httpd_resp_set_type', start)] + "\nreturn buf;}\n"
+HOMEKIT += r'''
+static std::string wsSetup(){
+ const auto&cfg=settings.get();char buf[2048]="{";size_t bufSz=sizeof(buf);int n=1,want=1;
+'''
+ws = (MAIN / "web_ws.cpp").read_text()
+start = ws.index('    bool hkReady = homekit_is_started();')
+HOMEKIT += ws[start:ws.index('    section();', start)] + "\nreturn buf;}\n"
+
+SOURCES = {"cn105_polling": CN105 + PUMP, "cn105_float_setters": CN105 + PUMP,
+           "link_source": LINK, "ble_handoff": BLE, "auto_band": AUTO,
+           "factory_reset": FACTORY, "homekit_pairing": HOMEKIT}
 failed = False
 with tempfile.TemporaryDirectory(prefix="cn105-native-delivery-") as directory:
     build = Path(directory)

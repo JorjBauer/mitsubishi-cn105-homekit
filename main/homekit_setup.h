@@ -33,6 +33,7 @@ int homekit_get_controller_count(void);
 
 /// Remove all HomeKit pairings and reboot. Returns false when HomeKit isn't
 /// running (nothing was reset); on success the device reboots shortly after.
+/// The persistent pairing latch clears when HAP reports reset completion.
 bool homekit_reset_pairings(void);
 
 /// Get a human-readable status string reflecting the current HAP state.

@@ -2,7 +2,8 @@
 """Compile the real WiFi trial/join/read functions with simulated SDK and NVS.
 
 The checks catch truncation in initial joins, persisted reconnects and trial
-rollback, and prevent a full-width SSID read from spilling into the password.
+rollback, prevent a full-width SSID read from spilling into the password, and
+block persistable Wi-Fi driver changes once factory reset starts.
 """
 from pathlib import Path
 import re
@@ -13,9 +14,9 @@ ROOT = Path(__file__).resolve().parents[2]
 SOURCE = (ROOT / "main/wifi_manager.cpp").read_text()
 
 
-def function(name):
+def function(name, source=SOURCE):
     match = re.search(r"^(?:static )?(?:bool|void|WifiManager::WifiTrialState) " + re.escape(name)
-                      + r"\([^;]*?\)\s*\n\{.*?^\}", SOURCE, re.MULTILINE | re.DOTALL)
+                      + r"\([^;]*?\)\s*\n?\{.*?^\}", source, re.MULTILINE | re.DOTALL)
     assert match, f"cannot find {name}"
     return match[0]
 
@@ -23,6 +24,7 @@ def function(name):
 PREFIX = r'''
 #include "wifi_manager.h"
 #include <algorithm>
+#include <atomic>
 #include <cassert>
 #include <cstring>
 #include <string>
@@ -30,6 +32,7 @@ PREFIX = r'''
 using esp_err_t = int;
 using esp_event_base_t = int;
 constexpr int ESP_OK = 0, WIFI_IF_STA = 0, WIFI_AUTH_OPEN = 0, WIFI_AUTH_WPA2_PSK = 3;
+constexpr int WIFI_IF_AP = 1, WIFI_MODE_STA = 1, WIFI_MODE_APSTA = 3;
 constexpr int WIFI_EVENT = 1, IP_EVENT = 2, WIFI_EVENT_STA_CONNECTED = 3;
 constexpr int WIFI_EVENT_STA_DISCONNECTED = 4, IP_EVENT_STA_GOT_IP = 5, CONNECTED_BIT = 1;
 struct wifi_config_t {
@@ -38,7 +41,25 @@ struct wifi_config_t {
         struct { int authmode; } threshold;
         struct { bool capable, required; } pmf_cfg;
     } sta;
+    struct {
+        uint8_t ssid[32], password[64], ssid_len;
+        int authmode, channel, max_connection, beacon_interval;
+    } ap;
 };
+// Compile the real boot latch below; only its class declaration is a fixture.
+class SettingsStore {
+public:
+    static void beginFactoryReset();
+    static bool isFactoryResetting();
+};
+static SettingsStore settings;
+struct esp_netif_t {};
+static esp_netif_t *s_apNetif = nullptr;
+static bool s_apActive = false;
+static int modeWrites, apWrites, driverMode = WIFI_MODE_STA;
+static wifi_config_t apDriver;
+static esp_netif_t *esp_netif_create_default_wifi_ap() { static esp_netif_t netif; return &netif; }
+static int esp_wifi_set_mode(int mode) { ++modeWrites; driverMode = mode; return ESP_OK; }
 struct ip_event_got_ip_t { struct { int ip; } ip_info; };
 using portMUX_TYPE = int;
 #define portMUX_INITIALIZER_UNLOCKED 0
@@ -61,7 +82,11 @@ static wifi_config_t driver;
 static std::string stored_ssid, stored_psk;
 static uint32_t uptime_ms() { return now_ms; }
 static esp_err_t esp_wifi_set_config(int iface, const wifi_config_t *cfg)
-{ assert(iface == WIFI_IF_STA); driver = *cfg; ++writes; return ESP_OK; }
+{
+    if (iface == WIFI_IF_AP) { apDriver = *cfg; ++apWrites; }
+    else { assert(iface == WIFI_IF_STA); driver = *cfg; ++writes; }
+    return ESP_OK;
+}
 static esp_err_t esp_wifi_get_config(int iface, wifi_config_t *cfg)
 { assert(iface == WIFI_IF_STA); if (!read_ok) return -1; *cfg = driver; return ESP_OK; }
 static esp_err_t esp_wifi_connect() { ++connects; return ESP_OK; }
@@ -93,7 +118,8 @@ static void fresh(const std::string &ssid = "", const std::string &psk = "")
     s_connected = s_wifiScanning = s_expectDisconnect = s_pendingJoin = false;
     s_retryCount = s_disconnects = 0;
     now_ms += 60000; // Keep the real loop's private clock gate moving forward.
-    writes = connects = saves = 0;
+    writes = connects = saves = modeWrites = apWrites = 0;
+    s_apActive = false; driverMode = WIFI_MODE_STA;
     stored_ssid = ssid; stored_psk = psk;
     memset(&driver, 0xa5, sizeof driver);
     read_ok = true;
@@ -114,8 +140,33 @@ static void got_ip()
     now_ms += 300;
     WifiManager::loop();
 }
-int main()
+static void reset_checks(const char *name)
 {
+    fresh("old-network", "old-password");
+    assert(WifiManager::connect("trial-network", "trial-password"));
+    if (!strcmp(name, "disable_ap")) WifiManager::enableAP("recovery-ap", "password");
+    const int configBefore = writes, apBefore = apWrites, modesBefore = modeWrites, savesBefore = saves;
+    settings.beginFactoryReset();
+    assert(settings.isFactoryResetting());
+    if (!strcmp(name, "expired_trial")) {
+        now_ms += 31000;
+        WifiManager::loop();
+    } else if (!strcmp(name, "trial_commit")) {
+        got_ip();
+    } else if (!strcmp(name, "sta_config")) {
+        applyStaConfig("late-network", "late-password");
+    } else if (!strcmp(name, "connect")) {
+        assert(!WifiManager::connect("late-network", "late-password"));
+    } else if (!strcmp(name, "enable_ap")) {
+        WifiManager::enableAP("late-ap", "late-password");
+    } else if (!strcmp(name, "disable_ap")) {
+        WifiManager::disableAP();
+    } else { assert(false); }
+    assert(writes == configBefore && apWrites == apBefore && modeWrites == modesBefore && saves == savesBefore);
+}
+int main(int argc, char **argv)
+{
+    if (argc > 1) { reset_checks(argv[1]); return 0; }
     const std::string max_ssid(32, 's'), max_key(64, 'a');
     // Initial join -> real IP event -> delayed persistence -> normal reconnect.
     fresh();
@@ -180,6 +231,13 @@ int main()
     WifiManager::getSSID(nullptr, 10);
     read_ok = false;
     WifiManager::getSSID(output, sizeof output); assert(output[0] == 0);
+    // Ordinary recovery AP changes must still reach the driver.
+    fresh();
+    WifiManager::enableAP("recovery-ap", "password");
+    assert(s_apActive && modeWrites == 1 && apWrites == 1 && driverMode == WIFI_MODE_APSTA);
+    assert(!strcmp((const char*)apDriver.ap.ssid, "recovery-ap"));
+    WifiManager::disableAP();
+    assert(!s_apActive && modeWrites == 2 && driverMode == WIFI_MODE_STA);
     puts("Wi-Fi credentials: join, commit, reconnect, rollback and bounded SSID reads passed");
 }
 '''
@@ -187,14 +245,26 @@ int main()
 state = re.search(r"^static constexpr uint32_t TRIAL_TIMEOUT_MS.*?^\} s_trial;",
                   SOURCE, re.MULTILINE | re.DOTALL)
 assert state, "cannot find trial state"
+settings_source = (ROOT / "main/settings.cpp").read_text()
+latch = re.search(r"^static std::atomic<bool> s_factoryResetting[^;]+;", settings_source, re.M)
+assert latch, "cannot find factory reset latch"
+reset_state = latch[0] + "\n" + "\n".join(function(n, settings_source) for n in
+    ["SettingsStore::beginFactoryReset", "SettingsStore::isFactoryResetting"])
 functions = ["wifi_event_handler", "applyStaConfig", "WifiManager::connect",
-             "WifiManager::getTrialState", "WifiManager::loop", "WifiManager::getSSID"]
+             "WifiManager::getTrialState", "WifiManager::loop", "WifiManager::getSSID",
+             "WifiManager::enableAP", "WifiManager::disableAP"]
 with tempfile.TemporaryDirectory(prefix="homekit-wifi-creds-") as tmp:
     unit = Path(tmp) / "test.cpp"
-    unit.write_text(PREFIX + "\n" + state[0] + "\n" + "\n".join(function(n) for n in functions) + CHECKS)
+    unit.write_text(PREFIX + "\n" + reset_state + "\n" + state[0] + "\n" + "\n".join(function(n) for n in functions) + CHECKS)
     exe = Path(tmp) / "test"
     subprocess.run(["g++", "-std=c++17", "-Wall", "-Wextra", "-Werror",
                     "-Wno-unused-parameter", "-fsanitize=address,undefined",
                     "-fno-omit-frame-pointer", "-g", "-I" + str(ROOT / "main"),
                     str(unit), "-o", str(exe)], check=True)
-    subprocess.run([str(exe)], check=True)
+    cases = ["expired_trial", "trial_commit", "sta_config", "connect", "enable_ap", "disable_ap"]
+    results = [subprocess.run([str(exe)]).returncode]
+    for case in cases:
+        result = subprocess.run([str(exe), case]).returncode
+        print(f"factory_reset_wifi/{case}: {'PASS' if result == 0 else 'FAIL'}", flush=True)
+        results.append(result)
+    raise SystemExit(any(results))

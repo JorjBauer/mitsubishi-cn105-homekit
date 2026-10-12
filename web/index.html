@@ -3848,8 +3848,8 @@ a:focus-visible,button:focus-visible,input:focus-visible,select:focus-visible{ou
   document.getElementById('forgetRemoteBtn').addEventListener('click',function(){
     var msg=remoteDialCount?'Forget all '+remoteDialCount+' paired Links? The device will restart.'
                            :'Forget the paired Link? The device will restart.';
-    if(confirm(msg)){
-      send({cmd:'forgetRemote'});
+    if(typedConfirm(msg,'FORGET','Forget Links')){
+      send({cmd:'forgetRemote',confirm:'FORGET'});
     }
   });
   document.getElementById('remoteDialList').addEventListener('click',function(e){
