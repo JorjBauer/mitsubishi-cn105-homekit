@@ -18,15 +18,15 @@ static const char *TAG = "link_sensor";
 // ══════════════════════════════════════════════════════════════════════════════
 // State
 //
-// feed() and loop() both currently run on the main task: a DIAL_SENSOR frame
-// is queued from the ESP-NOW receive callback (on_recv() in espnow_link.cpp,
-// which runs in the WiFi/ESP-NOW task) into an SPSC ring, and
-// EspnowLink::loop() — called from main.cpp on the main task, same as
-// LinkSensor::loop() — drains that ring and calls feed() via h_room_sensor().
-// The s_mux spinlock below is therefore not load-bearing today; it's kept
-// deliberately, same discipline as ble_sensor.cpp's s_mux, so this module
-// stays correct if the drain is ever moved off the main task. Everything
-// below is main-task-only unless noted.
+// Writers run on the main task: a DIAL_SENSOR frame is queued from the
+// ESP-NOW receive callback (on_recv() in espnow_link.cpp, WiFi/ESP-NOW task)
+// into an SPSC ring, and EspnowLink::loop() — called from main.cpp on the
+// main task, same as LinkSensor::loop() — drains it into feed() via
+// h_room_sensor() and calls forget() for a forgotten dial. Readers are not
+// all on the main task: the web state push also runs on the httpd task
+// (command replies, a newly connected client) and reads the table through
+// readings() and the accessors. s_mux guards s_dials for those readers; the
+// feed state machine below stays main-task-only.
 // ══════════════════════════════════════════════════════════════════════════════
 
 // ── Per-dial readings (guarded by s_mux) ───────────────────────────────────
