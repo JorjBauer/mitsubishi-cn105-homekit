@@ -832,6 +832,7 @@ a:focus-visible,button:focus-visible,input:focus-visible,select:focus-visible{ou
       <div class="stack-tight" style="flex:1;min-width:0">
         <div class="t">Paired with HomeKit</div>
         <div class="b" id="hkControllers">--</div>
+        <div class="b" id="hkSetupHidden" style="display:none">Setup code hidden after pairing. Reset HomeKit pairing to show it.</div>
       </div>
       <button class="btn-secondary grow0" id="hkShowSetupBtn">Show Setup Code</button>
     </div>
@@ -1197,6 +1198,10 @@ a:focus-visible,button:focus-visible,input:focus-visible,select:focus-visible{ou
   // both the state push and the toggle button so the two can't drift.
   function renderHkSetupToggle(){
     $('hkPairing').style.display=(hkPairedNow&&!hkSetupExpanded)?'none':'';
+    // The firmware stops sending the setup code once paired, so there is
+    // nothing to reveal: say so instead of offering an empty panel.
+    $('hkShowSetupBtn').style.display=hkPairedNow?'none':'';
+    $('hkSetupHidden').style.display=hkPairedNow?'':'none';
     $('hkShowSetupBtn').textContent=hkSetupExpanded?'Hide Setup Code':'Show Setup Code';
   }
 
@@ -2362,6 +2367,9 @@ a:focus-visible,button:focus-visible,input:focus-visible,select:focus-visible{ou
       if(s.hkSetupURI&&s.hkSetupURI!==lastQRURI){
         lastQRURI=s.hkSetupURI;
         renderQR(s.hkSetupURI,qrCanvas);
+      }else if(!s.hkSetupURI&&lastQRURI){
+        lastQRURI='';
+        qrCanvas.getContext('2d').clearRect(0,0,qrCanvas.width,qrCanvas.height);
       }
       $('hkButtons').style.display=(lastQRURI&&hkAppleUA)?'flex':'none';
     }

@@ -385,7 +385,7 @@ The page is organised into cards:
 
 *The **Heat Pump · CN105** card, expanded.*
 
-The web UI has no login. Anyone on your local network who can reach the device can change its settings, so keep it off untrusted networks. LAN authentication is a planned feature. In the meantime the device refuses WebSocket and POST requests that come from a web page on another site, hides the HomeKit setup code once a controller has paired, and asks you to type a confirmation word before Restart, Reset HomeKit Pairing, Forget Wi-Fi, or Factory Reset.
+The web UI has no login. Anyone on your local network who can reach the device can change its settings, so keep it off untrusted networks. LAN authentication is a planned feature, and the Origin check does not cover DNS rebinding (that would need a Host allowlist). In the meantime the device refuses WebSocket and POST requests that come from a web page on another site, hides the HomeKit setup code once a controller has paired, and asks you to type a confirmation word before Restart, Reset HomeKit Pairing, Forget Wi-Fi, or Factory Reset.
 
 Under **Unit Capabilities**, unchecking a mode your unit doesn't have hides it here, in Apple Home, and on a paired Link. Because that changes the HomeKit accessory shape, the UI prompts for a restart afterward.
 

@@ -44,12 +44,17 @@ static constexpr uint32_t WS_LOG_RESUME_HEAP = 70 * 1024;
 // WebSocket handler: GET /ws
 // ══════════════════════════════════════════════════════════════════════════════
 
+// Cross-site WebSocket hijacking: browsers attach Origin to the upgrade and
+// nothing else stops a foreign page driving this socket. Runs before the 101
+// response, so a refusal is a plain HTTP 403 and no upgrade happens.
+esp_err_t WebUI::wsPreHandshake(httpd_req_t *req) {
+    return requireSameOrigin(req) ? ESP_OK : ESP_FAIL;
+}
+
 esp_err_t WebUI::handleWebSocket(httpd_req_t *req) {
     // On first call (handshake), req->method == HTTP_GET
     if (req->method == HTTP_GET) {
-        // Cross-site WebSocket hijacking: browsers attach Origin to the
-        // upgrade, and nothing else stops a foreign page driving this socket.
-        if (!requireSameOrigin(req)) return ESP_FAIL;
+        // The Origin check already ran in wsPreHandshake, before the 101.
         int fd = httpd_req_to_sockfd(req);
 
         // All WS writes (including SDK control frames) run on httpd. Retire

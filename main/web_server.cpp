@@ -12,6 +12,9 @@
 #include <cstdio>
 #include <lwip/sockets.h>
 #include <array>
+#if !CONFIG_HTTPD_WS_PRE_HANDSHAKE_CB_SUPPORT
+#error "Origin check needs CONFIG_HTTPD_WS_PRE_HANDSHAKE_CB_SUPPORT=y (sdkconfig.defaults)"
+#endif
 #include "esp_rom_crc.h"
 
 static const char *TAG = "web";
@@ -473,7 +476,8 @@ void WebUI::begin(CN105Controller *ctrl) {
         .user_ctx  = this,
         .is_websocket = true,
         .handle_ws_control_frames = false,
-        .supported_subprotocol = NULL
+        .supported_subprotocol = NULL,
+        .ws_pre_handshake_cb = wsPreHandshake
     };
     httpd_register_uri_handler(_server, &wsUri);
 

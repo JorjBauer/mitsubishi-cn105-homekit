@@ -60,7 +60,9 @@ inline const char *webHkSetupValue(bool hkReady, int controllers, const char *va
 }
 
 // Largest POST /wifi-setup body accepted. The worst legitimate payload is a
-// 32-byte SSID plus a 63-byte password with every character \u-escaped.
+// 32-byte SSID plus a 63-byte password with every character escaped as two
+// bytes (JSON.stringify only escapes quotes, backslashes and control
+// characters), about 215 bytes with the keys; 320 leaves headroom.
 constexpr size_t WIFI_SETUP_MAX_BODY = 320;
 
 // Bytes to read for a request body of contentLen, or -1 to reject it (empty

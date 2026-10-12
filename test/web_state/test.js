@@ -296,4 +296,32 @@ same(DEFAULTS.target.min, '16', 'tempSlider ships in Celsius');
   checks++;
 }
 
+// Once paired the firmware sends no setup code or URI, so the page must not
+// offer a Show Setup Code control, must say why, and must clear a QR drawn
+// before the pairing.
+{
+  const fs = require('fs');
+  const path = require('path');
+  const src = fs.readFileSync(path.join(__dirname, '..', '..', 'web', 'index.html'), 'utf8');
+  assert.ok(src.includes("$('hkShowSetupBtn').style.display=hkPairedNow?'none':''"),
+    'Show Setup Code button must be hidden while paired');
+  assert.ok(src.includes('id="hkSetupHidden"') &&
+    src.includes("$('hkSetupHidden').style.display=hkPairedNow?'':'none'") &&
+    src.includes('Setup code hidden after pairing'),
+    'paired state must explain the hidden setup code');
+  assert.ok(/else if\(!s\.hkSetupURI&&lastQRURI\)\{\s*lastQRURI='';\s*qrCanvas\.getContext\('2d'\)\.clearRect/.test(src),
+    'an empty setup URI must clear the drawn QR and lastQRURI');
+  checks += 3;
+
+  // Firmware side, pinned on source text: the set handler only acts on a
+  // target that is a finite number, and the Origin check runs before the 101.
+  const ws = fs.readFileSync(path.join(__dirname, '..', '..', 'main', 'web_ws.cpp'), 'utf8');
+  assert.ok(/jsonGetFloat\(msg, "target", &floatVal\)\s*&&\s*std::isfinite\(floatVal\)/.test(ws),
+    'set target must be gated on jsonGetFloat and isfinite');
+  const srv = fs.readFileSync(path.join(__dirname, '..', '..', 'main', 'web_server.cpp'), 'utf8');
+  assert.ok(/\.ws_pre_handshake_cb\s*=\s*wsPreHandshake/.test(srv),
+    '/ws must register the Origin check as ws_pre_handshake_cb');
+  checks += 2;
+}
+
 console.log('PASS: web state handling (' + checks + ' checks)');
