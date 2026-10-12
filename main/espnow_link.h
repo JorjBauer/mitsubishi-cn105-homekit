@@ -81,3 +81,8 @@ bool espnow_console_started(void);
 // it lands in the cross-task mailbox and EspnowLink::loop() (main task, which
 // owns both the sl2 core and the LED strip) runs the terminal sequence.
 void espnow_forget_and_restart(void);
+// Factory-reset erase: wipes every NVS namespace but writes the unit's Serin
+// Link identity (namespace "serinlink", key "sl2_id") back, so dials that
+// pinned it can pair again. Leaves NVS deinitialized for the caller's
+// restart. False if the erase or the write-back failed.
+bool espnow_factory_erase_nvs(void);

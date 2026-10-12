@@ -601,8 +601,9 @@ void WebUI::handleWsMessage(httpd_req_t *req, const char *msg) {
         // so an explicit nvs_flash_deinit() bought nothing here: it does not
         // wait for concurrent users, it only freed the Storage object under a
         // settings.save() / eventlog_append() / HAP pairing write that little
-        // bit sooner.
-        nvs_flash_erase();
+        // bit sooner. The erase keeps only the unit's Serin Link identity,
+        // so dials that pinned it can pair again.
+        espnow_factory_erase_nvs();
         esp_restart();
 
     } else if (strcmp(cmd, "restart") == 0) {

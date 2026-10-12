@@ -25,6 +25,7 @@
 #include <esp_app_desc.h>
 #include <esp_system.h>
 #include <nvs.h>
+#include <nvs_flash.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
 #include <sodium.h>
@@ -267,6 +268,32 @@ static bool p_kv_set(void *, const char *key, const void *buf, size_t len) {
     if (nvs_open(SL2_NVS_NS, NVS_READWRITE, &h) != ESP_OK) return false;
     bool ok = nvs_set_blob(h, key, buf, len) == ESP_OK && nvs_commit(h) == ESP_OK;
     nvs_close(h);
+    return ok;
+}
+
+/* Factory reset erases every namespace, then writes the unit's Link identity
+ * back. Each dial pins that public key at pairing, so a freshly generated one
+ * would make every dial refuse to re-pair ("pin-mismatch") until the dial
+ * itself was reset. The bonds are still erased. Runs on the httpd task just
+ * before esp_restart(); NVS is left deinitialized, as a plain erase leaves it,
+ * so nothing else lands in the fresh partition before the restart. */
+bool espnow_factory_erase_nvs(void) {
+    uint8_t id[SL2_ED25519_PRIV + SL2_ED25519_PUB];
+    size_t len = sizeof id;
+    const bool keep = p_kv_get(nullptr, SL2_KV_IDENTITY, id, &len) && len == sizeof id;
+    // nvs_flash_erase() closes every handle and deinits the partition itself.
+    if (nvs_flash_erase() != ESP_OK) {
+        sodium_memzero(id, sizeof id);
+        LOG_ERROR("Factory reset: NVS erase failed");
+        return false;
+    }
+    if (!keep) return true;
+    const bool ok = nvs_flash_init() == ESP_OK &&
+                    p_kv_set(nullptr, SL2_KV_IDENTITY, id, sizeof id);
+    nvs_flash_deinit();
+    sodium_memzero(id, sizeof id);
+    if (!ok) LOG_ERROR("Factory reset: Serin Link identity not restored — paired "
+                       "dials must be reset before they can pair again");
     return ok;
 }
 
@@ -1364,6 +1391,7 @@ void espnow_register_console(void) {
 
 #else  // ESPNOW_REMOTE_ENABLE == 0
 #include <esp_system.h>
+#include <nvs_flash.h>
 #include "sl2_proto.h"   // SL2_ROOMST_OK — dependency-free, safe without the rest of this TU
 EspnowLink espnowLink;
 void EspnowLink::begin(CN105Controller *) {}
@@ -1389,4 +1417,5 @@ EspnowPairOutcome EspnowLink::pairOutcome() const { return ESPNOW_PAIR_NONE; }
 void espnow_register_console(void) {}
 bool espnow_console_started(void) { return false; }
 void espnow_forget_and_restart(void) { esp_restart(); }
+bool espnow_factory_erase_nvs(void) { return nvs_flash_erase() == ESP_OK; }   // no Link identity to keep
 #endif
