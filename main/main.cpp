@@ -318,6 +318,9 @@ extern "C" void app_main(void)
             if (!homekit_init(displayName, BRAND_MANUFACTURER, BRAND_MODEL,
                               serialNumber, FW_VERSION, apName)) {
                 LOG_ERROR("HomeKit init failed, will retry in 10s");
+            } else {
+                LOG_INFO("Free INTERNAL 8-bit heap after HAP start: %zu bytes",
+                         heap_caps_get_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT));
             }
         }
 
