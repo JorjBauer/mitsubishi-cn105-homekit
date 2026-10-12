@@ -457,7 +457,9 @@ void homekit_sync_thermostat(CN105Controller &cn105)
     // is deliberately no "last sent" shadow state to go stale.
     if (s.power && s.mode == CN105_MODE_AUTO) {
         AutoTarget want = resolveAutoTarget(s);
-        if (fabsf(cn105.quantizeSetpoint(want.setpoint) - s.targetTemp) > want.resendDeadband) {
+        // Quantize both sides: on a legacy-encoding unit the wanted value
+        // (stored raw) would otherwise never match the whole degree it reports.
+        if (fabsf(cn105.quantizeSetpoint(want.setpoint) - cn105.quantizeSetpoint(s.targetTemp)) > want.resendDeadband) {
             LOG_INFO("[HK:Thermo] AUTO target %.1fC (unit at %.1f, room %.1f, heat %.1f, cool %.1f)",
                      want.setpoint, s.targetTemp, s.roomTemp,
                      settings.get().heatingThreshold, settings.get().coolingThreshold);

@@ -866,7 +866,7 @@ void CN105Controller::handleInfoResponse(const uint8_t *data, uint8_t dataLen) {
             _wanted.hasPower = false;
         if (_wanted.hasMode && next.mode == _wanted.mode)
             _wanted.hasMode = false;
-        if (_wanted.hasTemp && fabsf(next.targetTemp - _wanted.targetTemp) < 0.3f)
+        if (_wanted.hasTemp && fabsf(next.targetTemp - quantizeSetpoint(_wanted.targetTemp)) < 0.3f)
             _wanted.hasTemp = false;
         if (_wanted.hasFan && next.fanSpeed == _wanted.fanSpeed)
             _wanted.hasFan = false;
