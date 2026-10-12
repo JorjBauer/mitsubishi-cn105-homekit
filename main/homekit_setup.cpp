@@ -28,11 +28,35 @@ static char* s_setupPayload = nullptr;          // allocated by esp_hap_get_setu
 static const char* s_statusString = "Not Ready";
 static hap_cid_t s_cid = HAP_CID_BRIDGE;
 
+// The SDK resets asynchronously and leaves its controller RAM entries valid
+// until reboot. Once completion is reported, those stale entries must never
+// re-latch the settings flag, including on late connection events.
+static bool s_pairingsReset = false;
+
+static void record_paired_controllers(void)
+{
+    if (!s_pairingsReset && hap_get_paired_controller_count() > 0 &&
+        !settings.get().homekitPaired) {
+        settings.get().homekitPaired = true;
+        settings.save();
+    }
+}
+
 // ── HAP event handler (esp_event style) ─────────────────────────────────────
 
 static void hap_event_handler(void* arg, esp_event_base_t event_base,
                                int32_t event, void* data)
 {
+    if (event == HAP_EVENT_ACC_REBOOTING && data &&
+        strcmp((const char*)data, HAP_REBOOT_REASON_RESET_PAIRINGS) == 0) {
+        // This event follows the SDK's pairing-storage erase, not merely its
+        // successful reset request enqueue. Keep the latch on enqueue failure.
+        s_pairingsReset = true;
+        settings.get().homekitPaired = false;
+        settings.save();
+    } else {
+        record_paired_controllers();
+    }
     switch (event) {
         case HAP_EVENT_PAIRING_STARTED:
             LOG_INFO("[HK] Pairing started");
@@ -318,6 +342,7 @@ bool homekit_init(const char* name, const char* manufacturer,
     // built with and bump c# if the service set changed since the last
     // successful start.
     s_started = true;
+    record_paired_controllers();
     homekit_reconcile_service_shape();
 
     // Override the hardcoded "MyHost" mDNS hostname from esp-homekit-sdk

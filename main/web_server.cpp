@@ -217,7 +217,7 @@ esp_err_t WebUI::handleWifiStatus(httpd_req_t *req) {
         ",\"joined\":%s,\"trial\":\"%s\",\"hkSetupCode\":\"%s\"}",
         escSSID, escName, connected ? "true" : "false",
         joined ? "true" : "false", trial,
-        webHkSetupValue(true, homekit_get_controller_count(), homekit_get_setup_code()));
+        webHkSetupValue(true, homekit_get_controller_count(), homekit_get_setup_code(), settings.get().homekitPaired));
 
     httpd_resp_set_type(req, "application/json");
     httpd_resp_sendstr(req, buf);

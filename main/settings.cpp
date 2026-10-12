@@ -259,6 +259,13 @@ void SettingsStore::begin() {
         nvs_get_str(_handle, "setupCode", _settings.setupCode, &len);
     }
 
+    // hkPaired — additive latch; absent on older firmware defaults unpaired.
+    {
+        uint8_t val = 0;
+        nvs_get_u8(_handle, "hkPaired", &val);
+        _settings.homekitPaired = (val != 0);
+    }
+
     // wifiChangePending — bool stored as uint8_t
     {
         uint8_t val = 0;
@@ -529,6 +536,7 @@ void SettingsStore::save() {
     nvs_set_u8(_handle, "useFahr", _settings.useFahrenheit ? 1 : 0);
     nvs_set_u8(_handle, "betaChan", _settings.betaChannel ? 1 : 0);
     nvs_set_str(_handle, "setupCode", _settings.setupCode);
+    nvs_set_u8(_handle, "hkPaired", _settings.homekitPaired ? 1 : 0);
     nvs_set_u8(_handle, "wifiChgPend", _settings.wifiChangePending ? 1 : 0);
     nvs_set_u8(_handle, "vaneConfig", _settings.vaneConfig);
     nvs_set_u8(_handle, "modeMask", _settings.modeMask);

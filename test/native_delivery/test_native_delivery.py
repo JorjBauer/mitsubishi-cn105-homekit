@@ -246,8 +246,35 @@ static void sodium_memzero(void* b,size_t n){memset(b,0,n);}
 ''' + re.search(r'^static const char \*SL2_NVS_NS = "[^"]+";', adapter, re.M).group(0)
 FACTORY += "\n" + "\n".join(function(adapter, n) for n in ["p_kv_get", "p_kv_set", "espnow_factory_erase_nvs"])
 
+# H2 compiles SettingsStore and HomeKit setup intact against NVS/HAP boundaries.
+# The reset stub queues work: storage completion is delivered separately.
+HOMEKIT = HOST + (HERE / "homekit_stubs.inc").read_text()
+HOMEKIT += "\n" + clean("settings.h") + "\n" + clean("settings.cpp").replace('static const char *TAG', 'static const char *settings_TAG')
+HOMEKIT += "\n" + clean("homekit_setup.h") + "\n" + clean("homekit_setup.cpp")
+HOMEKIT += '\n#include "web_security.h"\n'
+
+# Compile the shipped HTTP and WS serialization expressions, not copies of
+# their security policy. Only their buffer append boundary is a host stub.
+HOMEKIT += r'''
+#include <cstdarg>
+static void stateAppend(char*buf,size_t cap,int*n,int*want,const char*fmt,...){
+ va_list ap;va_start(ap,fmt);int wrote=vsnprintf(buf+*n,cap-*n,fmt,ap);va_end(ap);*n+=wrote;*want+=wrote;}
+static std::string httpSetup(){
+ const char*escSSID="",*escName="Test",*trial="idle";bool connected=false,joined=false;
+'''
+http = (MAIN / "web_server.cpp").read_text()
+start = http.index('    char buf[340];')
+HOMEKIT += http[start:http.index('    httpd_resp_set_type', start)] + "\nreturn buf;}\n"
+HOMEKIT += r'''
+static std::string wsSetup(){
+ const auto&cfg=settings.get();char buf[2048]="{";size_t bufSz=sizeof(buf);int n=1,want=1;
+'''
+ws = (MAIN / "web_ws.cpp").read_text()
+start = ws.index('    bool hkReady = homekit_is_started();')
+HOMEKIT += ws[start:ws.index('    section();', start)] + "\nreturn buf;}\n"
+
 SOURCES = {"cn105_polling": CN105 + PUMP, "link_source": LINK, "ble_handoff": BLE, "auto_band": AUTO,
-           "factory_reset": FACTORY}
+           "factory_reset": FACTORY, "homekit_pairing": HOMEKIT}
 failed = False
 with tempfile.TemporaryDirectory(prefix="cn105-native-delivery-") as directory:
     build = Path(directory)

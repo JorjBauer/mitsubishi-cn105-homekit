@@ -67,6 +67,7 @@ struct DeviceSettings {
     bool     useFahrenheit = false;     // Web UI display unit
     bool     betaChannel = false;      // Update check also reads the beta manifest
     char     setupCode[9] = "";        // HomeKit pairing code (8 digits)
+    bool     homekitPaired = false;    // Latched until an explicit pairing reset
     bool     wifiChangePending = false; // True after WiFi creds changed via web UI (shorter fallback timeout)
     uint8_t  vaneConfig = 2;          // 0=no vanes, 1=vertical only, 2=vertical+horizontal
     uint8_t  modeMask = MODE_CAP_ALL; // MODE_CAP_* bits — operating modes this unit supports (mode_caps.h)

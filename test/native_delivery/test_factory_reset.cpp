@@ -4,6 +4,7 @@ int main(int, char** argv) {
  const auto id=bytes(SL2_ED25519_PRIV+SL2_ED25519_PUB,3);
  nvs.ns["serinlink"][SL2_KV_IDENTITY]=id;
  nvs.ns["serinlink"][SL2_KV_BONDS]=bytes(64,9);
+ nvs.ns["ac-settings"]["hkPaired"]={1};
  nvs.ns["settings"]["deviceName"]=bytes(8,1);
  nvs.ns["nvs.net80211"]["sta.ssid"]=bytes(32,2);
  CASE("identity_survives_factory_erase") {

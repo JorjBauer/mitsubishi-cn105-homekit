@@ -55,8 +55,9 @@ inline bool webOriginAllowed(const char *origin, const char *host) {
 
 // The HomeKit setup code (and the pairing URI that embeds it) is only useful,
 // and only shown, while nobody is paired.
-inline const char *webHkSetupValue(bool hkReady, int controllers, const char *value) {
-    return (hkReady && controllers <= 0 && value) ? value : "";
+inline const char *webHkSetupValue(bool hkReady, int controllers, const char *value,
+                                   bool previouslyPaired = false) {
+    return (hkReady && !previouslyPaired && controllers <= 0 && value) ? value : "";
 }
 
 // Largest POST /wifi-setup body accepted. The worst legitimate payload is a

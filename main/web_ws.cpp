@@ -1015,11 +1015,11 @@ void WebUI::pushState() {
         (int)cfg.modeMask,
         (int)(hkReady ? homekit_get_boot_mode_mask() : cfg.modeMask),
         hkReady ? "true" : "false",
-        (hkReady && hkControllers > 0) ? "true" : "false",
+        (cfg.homekitPaired || hkControllers > 0) ? "true" : "false",
         hkControllers,
         homekit_get_status_string(),
-        webHkSetupValue(hkReady, hkControllers, homekit_get_setup_code()),
-        webHkSetupValue(hkReady, hkControllers, homekit_get_setup_payload())
+        webHkSetupValue(hkReady, hkControllers, homekit_get_setup_code(), cfg.homekitPaired),
+        webHkSetupValue(hkReady, hkControllers, homekit_get_setup_payload(), cfg.homekitPaired)
     );
     section();
 
