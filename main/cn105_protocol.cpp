@@ -122,6 +122,9 @@ void CN105Controller::loop() {
 
     // ── Read any incoming bytes ─────────────────────────────────────────────
     readSerial();
+    // RX can complete a cycle at a later millisecond than loop entry. Base
+    // elapsed-time comparisons on a clock sampled after those timestamps.
+    now = uptime_ms();
 
     // ── Connection phase ────────────────────────────────────────────────────
     if (!_state.connected) {
@@ -155,7 +158,8 @@ void CN105Controller::loop() {
         taskEXIT_CRITICAL(&_mux);
         LOG_INFO("Sending pending set command (flags=0x%02X flags2=0x%02X)", cmd.flags1, cmd.flags2);
         sendSetPacket(cmd);
-        _lastCycleEnd = now + CN105_DEFER_DELAY;
+        _lastCycleEnd = now;
+        _pollDelayMs = CN105_DEFER_DELAY;
         return;
     }
 
@@ -166,7 +170,8 @@ void CN105Controller::loop() {
         _pendingRemoteTemp = false;
         taskEXIT_CRITICAL(&_mux);
         sendRemoteTempPacket(remoteTempC);
-        _lastCycleEnd = now + CN105_DEFER_DELAY;
+        _lastCycleEnd = now;
+        _pollDelayMs = CN105_DEFER_DELAY;
         return;
     }
 
@@ -217,8 +222,10 @@ void CN105Controller::loop() {
             }
         }
     } else {
-        if (now >= _lastCycleEnd &&
-            (now - _lastCycleEnd) >= _updateInterval) {
+        // Keep the timestamp in the past: unsigned elapsed time remains
+        // valid across uptime rollover, including the post-SET delay.
+        if ((uint32_t)(now - _lastCycleEnd) >= _updateInterval + _pollDelayMs) {
+            _pollDelayMs = 0;
             LOG_DEBUG("Starting new poll cycle");
             _cycleRunning = true;
             _cycleStartMs = now;
@@ -661,6 +668,12 @@ void CN105Controller::processPacket(const uint8_t *pkt, uint8_t len) {
             _lastSuccessfulResponse = _state.lastUpdate;
             taskEXIT_CRITICAL(&_mux);
             _connectRetries = 0;
+            _cycleRunning = false;
+            _awaitingResponse = false;
+            _pollDelayMs = 0;
+            // A new handshake always starts a fresh poll immediately. Do not
+            // retain a pre-disconnect cycle timestamp or SET deferral.
+            _lastCycleEnd = uptime_ms() - _updateInterval;
             break;
 
         case CN105_PKT_SET_ACK:

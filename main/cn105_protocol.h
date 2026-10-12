@@ -296,6 +296,7 @@ private:
     // A "cycle" sends all info requests (0x02, 0x03, 0x06) sequentially,
     // waiting for each response before sending the next request.
     uint32_t _lastCycleEnd    = 0;   // uptime_ms() when last cycle completed
+    uint32_t _pollDelayMs     = 0;   // extra delay after a SET/remote-temp write
     uint32_t _cycleStartMs    = 0;   // uptime_ms() when current cycle started
     bool     _cycleRunning    = false;
     uint8_t  _pollPhase       = 0;   // index into pollTypes[] within a cycle
