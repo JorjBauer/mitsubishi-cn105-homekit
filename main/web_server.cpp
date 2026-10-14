@@ -110,7 +110,25 @@ static bool isApSubnetClient(httpd_req_t *req) {
     return ip && (ip & 0xFFFFFF00) == 0xC0A80400;
 }
 
+// Host allowlist check alone, without sending a refusal.
+static bool requestHostAllowed(httpd_req_t *req) {
+    char host[128] = "", staIP[16] = "";
+    size_t hl = httpd_req_get_hdr_value_len(req, "Host");
+    if (WifiManager::isConnected()) WifiManager::getIP(staIP, sizeof(staIP));
+    return hl > 0 && hl < sizeof(host) &&
+           httpd_req_get_hdr_value_str(req, "Host", host, sizeof(host)) == ESP_OK &&
+           webHostAllowed(host, staIP, WifiManager::getHostname());
+}
+
+static void serveCNAPage(httpd_req_t *req);
+
 esp_err_t WebUI::handleRoot(httpd_req_t *req) {
+    // Captive probes that request "/" (Ubuntu's NetworkManager) arrive under a
+    // foreign Host; AP-subnet clients get the static portal page, not a 403.
+    if (webUI._apMode && isApSubnetClient(req) && !requestHostAllowed(req)) {
+        serveCNAPage(req);
+        return ESP_OK;
+    }
     if (!requireSameOrigin(req)) return ESP_FAIL;
     // If AP fallback is active and the client is on the AP subnet, serve the
     // WiFi setup page instead of the main UI.
@@ -152,15 +170,16 @@ static void serveCNAPage(httpd_req_t *req) {
     httpd_resp_sendstr(req, CNA_PAGE);
 }
 
-// Catch-all 404 handler validates Host in both STA and recovery modes. Serves
-// the captive-portal page to AP-subnet clients using an allowed Host; any
-// other allowed client gets a normal 404 so the main UI behaves normally.
+// Catch-all 404 handler. While the fallback AP is active, AP-subnet clients get
+// the captive-portal page whatever their Host: OS probes (captive.apple.com,
+// connectivitycheck.gstatic.com, ...) arrive under a foreign Host, and the page
+// is static with no device data. Everyone else is Host-checked and gets a 404.
 esp_err_t WebUI::handleRedirect404(httpd_req_t *req, httpd_err_code_t) {
-    if (!requireSameOrigin(req)) return ESP_FAIL;
     if (webUI.isAPMode() && isApSubnetClient(req)) {
         serveCNAPage(req);
         return ESP_OK;
     }
+    if (!requireSameOrigin(req)) return ESP_FAIL;
     httpd_resp_send_err(req, HTTPD_404_NOT_FOUND, "Not found");
     return ESP_FAIL;
 }
@@ -353,8 +372,8 @@ void WebUI::applyCaptivePortalHandler() {
     // Keep Host/Origin checks on unknown paths even outside recovery mode.
     httpd_register_err_handler(_server, HTTPD_404_NOT_FOUND, handleRedirect404);
     if (_apMode) {
-        // Catch unknown paths addressed to an allowed device Host. Foreign
-        // captive-probe hostnames are refused by the strict Host allowlist.
+        // Unknown paths from AP-subnet clients, including foreign-Host OS
+        // captive probes, get the static captive-portal page.
         LOG_INFO("Captive portal handler enabled (AP mode)");
     } else {
         LOG_INFO("Captive portal handler disabled");

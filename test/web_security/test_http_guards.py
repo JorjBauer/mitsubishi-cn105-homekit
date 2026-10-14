@@ -161,6 +161,16 @@ int main() {
         for (Handler handler : handlers) {
             httpd_req_t foreign; foreign.host = "evil.example"; foreign.cached = true;
             scans = credentialReads = 0;
+            if (ap && handler == WebUI::handleRoot) {
+                // "/" captive probes (Ubuntu) from AP clients get the portal page.
+                check(handler(&foreign) == ESP_OK && foreign.status == 200 && foreign.sends == 1,
+                      "foreign-Host root probe gets portal page on AP");
+                apClient = false;
+                httpd_req_t lan; lan.host = "evil.example";
+                check(handler(&lan) == ESP_FAIL && lan.status == 403,
+                      "foreign Host from a non-AP client rejected by root");
+                apClient = ap;
+            } else
             check(handler(&foreign) == ESP_FAIL && foreign.status == 403 && foreign.sends == 1,
                   "foreign Host rejected by real handler");
             check(scans == 0 && credentialReads == 0, "refusal precedes Wi-Fi access");
@@ -176,9 +186,20 @@ int main() {
         registered404 = nullptr;
         webUI.applyCaptivePortalHandler();
         check(registered404 != nullptr, "404 guard installed in STA and AP modes");
+        // OS captive probes use a foreign Host; AP clients must still get the
+        // static portal page or the phone's sign-in sheet shows a 403.
         httpd_req_t foreign; foreign.host = "connectivitycheck.gstatic.com";
-        check(registered404(&foreign, 404) == ESP_FAIL && foreign.status == 403,
-              "foreign captive-probe Host rejected by recovery 404");
+        if (ap)
+            check(registered404(&foreign, 404) == ESP_OK && foreign.status == 200 &&
+                  foreign.sends == 1, "foreign captive-probe Host gets portal page on AP");
+        else
+            check(registered404(&foreign, 404) == ESP_FAIL && foreign.status == 403,
+                  "foreign Host rejected by STA 404");
+        apClient = false;
+        httpd_req_t lan; lan.host = "evil.example";
+        check(registered404(&lan, 404) == ESP_FAIL && lan.status == 403,
+              "foreign Host from a non-AP client rejected by 404");
+        apClient = ap;
         httpd_req_t own; own.host = "192.168.4.1";
         check(registered404(&own, 404) == (ap ? ESP_OK : ESP_FAIL) && own.status == (ap ? 200 : 404),
               "own recovery Host retains 404 routing");
@@ -188,8 +209,8 @@ int main() {
 '''
 
 redirect = "WebUI::handleRedirect404" if "esp_err_t WebUI::handleRedirect404(" in SOURCE else "handleRedirect404"
-methods = ["WebUI::requireSameOrigin", "WebUI::sendGzipPage", "WebUI::handleRoot",
-           "WebUI::handleRecoveryPage", "serveCNAPage", redirect, "WebUI::handleWifiStatus",
+methods = ["WebUI::requireSameOrigin", "WebUI::sendGzipPage", "requestHostAllowed",
+           "serveCNAPage", "WebUI::handleRoot", "WebUI::handleRecoveryPage", redirect, "WebUI::handleWifiStatus",
            "WebUI::handleWifiScan", "WebUI::handleManifest", "WebUI::handleIcon192",
            "WebUI::handleIcon512", "WebUI::handleFavicon", "WebUI::applyCaptivePortalHandler"]
 with tempfile.TemporaryDirectory() as build:
