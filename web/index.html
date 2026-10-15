@@ -1781,6 +1781,15 @@ a:focus-visible,button:focus-visible,input:focus-visible,select:focus-visible{ou
     (s.bleSensors||[]).forEach(function(b){if(MEMBER_BLE0+b.i===bit)nm=b.name||('Sensor '+(b.i+1))});
     return nm||'Remote Sensor';
   }
+  // Every remote feed and every room poll rides the CN105 link, so with it
+  // down s.room is only the last poll and nothing selected reaches the pump.
+  // The card then shows the selection and the sensors, never what the pump
+  // "sees". A frame without the field reads as connected.
+  function pumpOffline(s){return s.connected===false}
+  function pumpRoom(s){return pumpOffline(s)?null:s.room}
+  // "<name> · Heat pump offline", without repeating "heat pump" when the
+  // selection IS the built-in sensor.
+  function offlineLabel(name,tail){return name===memberName({},MEMBER_INTERNAL)?'Heat pump offline':name+tail}
   // One entry per sensor this unit can offer, in display order (internal,
   // BLE sensors, Serin Link). bit = the firmware's ROOM_MEMBER_* index.
   function roomSensors(s){
@@ -1795,7 +1804,7 @@ a:focus-visible,button:focus-visible,input:focus-visible,select:focus-visible{ou
     // no offset lever — the pump reads its own sensor (hasOffset:false).
     list.push({bit:MEMBER_INTERNAL,name:memberName(s,MEMBER_INTERNAL),
                sub:s.roomMode===1?'Used automatically when no remote sensor is live':'Built into the indoor unit',
-               temp:overridden?null:s.room,active:true,stale:false,off:false,
+               temp:overridden?null:pumpRoom(s),active:true,stale:false,off:false,
                checkable:false,hasOffset:false});
     (s.bleSensors||[]).forEach(function(b){
       var e={bit:MEMBER_BLE0+b.i,idx:b.i,name:memberName(s,MEMBER_BLE0+b.i),badge:b.type,
@@ -1872,7 +1881,10 @@ a:focus-visible,button:focus-visible,input:focus-visible,select:focus-visible{ou
     // While the selected remote is stale or silent the pump reads its own
     // thermistor, so the selection highlight follows REALITY: the built-in
     // row shows as in use, the configured row keeps only its radio semantics.
-    var fallback=!avg&&s.roomSingle>0&&(s.roomStatus===1||s.roomStatus===2);
+    // With the pump unreachable there is no reality to follow, so the list
+    // shows the configuration and each sensor's own health instead.
+    var offline=pumpOffline(s);
+    var fallback=!avg&&!offline&&s.roomSingle>0&&(s.roomStatus===1||s.roomStatus===2);
     var effSel=avg?checked:(fallback?m.bit===MEMBER_INTERNAL:checked);
     var cls='src-row'+(effSel&&!exclStale&&!m.off?' sel':'')+(exclStale?' stale':'')+(m.off?' dim':'');
     var lead;
@@ -1881,7 +1893,9 @@ a:focus-visible,button:focus-visible,input:focus-visible,select:focus-visible{ou
     }else if(avg){
       lead='<span class="chk'+(checked&&!m.off?' on':'')+'">'+(checked&&!m.off?CHECK_SVG:'')+'</span>';
     }else{
-      var dot=m.off?'idle':m.stale?'error':(m.bit!==MEMBER_INTERNAL&&m.active)?'active':(effSel&&m.bit===MEMBER_INTERNAL)?'active':'idle';
+      // A remote dot is that sensor's own liveness; the built-in dot says the
+      // pump is reading it, which nobody can know while the link is down.
+      var dot=m.off?'idle':m.stale?'error':(m.bit!==MEMBER_INTERNAL&&m.active)?'active':(effSel&&m.bit===MEMBER_INTERNAL&&!offline)?'active':'idle';
       lead='<span class="status-dot '+dot+'"></span>';
     }
     var badges='';
@@ -1898,6 +1912,7 @@ a:focus-visible,button:focus-visible,input:focus-visible,select:focus-visible{ou
       var b=m.bit===MEMBER_INTERNAL?null:s.roomStatus===1?'stale':s.roomStatus===2?'nodata':null;
       badges+=b==='stale'?'<span class="src-badge stale">Selected · stale</span>'
              :b==='nodata'?'<span class="src-badge mut">Selected · no reading</span>'
+             :offline?'<span class="src-badge mut">Selected</span>'
              :'<span class="src-badge">Active</span>';
     }
     if(!avg&&!checked&&fallback&&m.bit===MEMBER_INTERNAL){
@@ -1924,7 +1939,7 @@ a:focus-visible,button:focus-visible,input:focus-visible,select:focus-visible{ou
     var members=s.roomMembers|0;
     if(avg){
       var c=contribCount(s),exclNames=[],x=0,exclChips='';
-      if(s.avgFallback)chips+='<span class="chip">Built-in sensor · fallback</span>';
+      if(s.avgFallback&&!pumpOffline(s))chips+='<span class="chip">Built-in sensor · fallback</span>';
       model.forEach(function(m){
         var b=1<<m.bit;
         if(!(members&b))return;
@@ -1957,7 +1972,16 @@ a:focus-visible,button:focus-visible,input:focus-visible,select:focus-visible{ou
       else if(s.roomSingle>0&&s.roomStatus===2){footTxt=nm+' · no reading · using the built-in sensor'}
       else{var a=sel&&fmtAge(sel.ageMs);footTxt=nm+(a?' · updated '+a:'')}
     }
-    $('heroVal').textContent=(avg&&s.avgFeeding&&s.effTemp!=null)?fmtReadingTemp(s.effTemp):fmtReadingTemp(s.room);
+    // Link down outranks every sensor message: the hero is about the pump.
+    // Neutral, not warn — the Heat Pump card above already owns the alarm.
+    if(pumpOffline(s)){
+      var sends=avg?(contribCount(s)>0&&!s.avgFallback):(s.roomSingle>0&&s.roomStatus===0);
+      footTxt='Not connected to the heat pump'+
+        (sends?' · '+(avg?'the average':memberName(s,s.roomSingle))+' will be sent when it reconnects':'');
+      warn=false;
+    }
+    $('heroVal').textContent=fmtReadingTemp(pumpOffline(s)?null:
+      (avg&&s.avgFeeding&&s.effTemp!=null)?s.effTemp:s.room);
     var ch=$('heroChips');setHtml(ch,chips);ch.style.display=chips?'':'none';
     var f=$('heroFoot');f.className='hero-foot'+(warn?' warn':'');f.textContent=footTxt;
   }
@@ -1968,9 +1992,12 @@ a:focus-visible,button:focus-visible,input:focus-visible,select:focus-visible{ou
     var members=s.roomMembers|0;
     var bleOn=s.bleEnabled!==undefined&&!!s.bleEnabled;
     var cls=null,msg=null;
+    // Sensor trouble is still worth a banner while the link is down, but not
+    // the clause about what the pump is reading instead.
+    var offline=pumpOffline(s);
     var staleM=[];model.forEach(function(m){if(avg&&(members&(1<<m.bit))&&((s.exclStale|0)&(1<<m.bit)))staleM.push(m)});
     if(avg&&s.avgFallback){
-      cls='warn';msg="No remote readings. Using the heat pump's built-in sensor until one returns.";
+      cls='warn';msg='No remote readings.'+(offline?'':" Using the heat pump's built-in sensor until one returns.");
     }else if(avg&&staleM.length){
       var names=staleM.map(function(m){return m.name}).join(' and ');
       var aget=fmtAge(staleM[0].ageMs);
@@ -1991,7 +2018,7 @@ a:focus-visible,button:focus-visible,input:focus-visible,select:focus-visible{ou
       cls='warn';
       msg='No update from '+(selM?selM.name:memberName(s,s.roomSingle))+
           (fmtAge(selM&&selM.ageMs)?' for '+fmtAge(selM.ageMs).replace(' ago',''):'')+
-          (s.bleReverted||s.roomSingle===MEMBER_LINK?' — reverted to the built-in sensor':'');
+          (!offline&&(s.bleReverted||s.roomSingle===MEMBER_LINK)?' — reverted to the built-in sensor':'');
     }else if(!avg&&s.roomSingle>0&&s.roomStatus===2){
       // Selected source has never reported: the pump quietly falls back, so
       // say what's silent, why, and what's covering. This outranks the
@@ -2005,7 +2032,7 @@ a:focus-visible,button:focus-visible,input:focus-visible,select:focus-visible{ou
       }else{
         msg='No reading yet from '+memberName(s,s.roomSingle)+'.';
       }
-      msg+=" Using the heat pump's built-in sensor.";
+      if(!offline)msg+=" Using the heat pump's built-in sensor.";
     }else{
       var low=null;
       if(bleOn)(s.bleSensors||[]).forEach(function(b){if(low==null&&b.batt>=0&&b.batt<=20)low=b});
@@ -2019,7 +2046,14 @@ a:focus-visible,button:focus-visible,input:focus-visible,select:focus-visible{ou
   function renderRoomSummary(s,model){
     var roomDot=$('roomDot'),roomLbl=$('roomStatusLabel');
     function set(dot,txt,col){roomDot.className='status-dot '+dot;roomLbl.textContent=txt;roomLbl.style.color=col}
-    if(s.roomMode===1){
+    if(pumpOffline(s)){
+      // Grey like the Heat Pump header's own "Disconnected", so the eye goes
+      // to that card rather than to a sensor that is fine.
+      var avgOn=s.roomMode===1&&contribCount(s)>0&&!s.avgFallback;
+      set('idle',avgOn?'Average · Heat pump offline'
+        :offlineLabel(s.roomMode===1?memberName(s,MEMBER_INTERNAL):memberName(s,s.roomSingle),' · Heat pump offline'),
+        'var(--text3)');
+    }else if(s.roomMode===1){
       // Only STALE exclusions degrade the summary to orange — a member out
       // because BLE is deliberately off reads as the remaining contributor
       // (frame 3f), not as a problem.
@@ -2043,6 +2077,26 @@ a:focus-visible,button:focus-visible,input:focus-visible,select:focus-visible{ou
       else if(s.roomSingle>0)set('active',nm,'var(--green)');
       else set('idle',nm,'var(--text3)');
     }
+  }
+  // The Climate panel's source line under the Room reading. Driven by the
+  // applied source + its own status (not the old BLE-only feed/stale flags)
+  // so Serin Link shows up and a stale feed of ANY source reads as stale, not
+  // as a live "Remote Sensor". Green (live) means the pump is being fed, so it
+  // drops while the link is down.
+  function tempSourceView(s){
+    var live,stale,label;
+    if(s.roomMode===1){
+      var cN=contribCount(s);
+      if(s.avgFallback){label='Average · fallback';stale=true;live=false}
+      else if(cN>0){label='Average · '+cN+' sensor'+(cN>1?'s':'');live=true;stale=false}
+      else{label=memberName(s,MEMBER_INTERNAL);live=false;stale=false}
+    }else{
+      stale=s.roomStatus===1;                // SL2_ROOMST_STALE
+      live =s.roomSingle>0&&s.roomStatus===0;
+      label=memberName(s,s.roomSingle||0);
+    }
+    if(pumpOffline(s)){label=offlineLabel(label,' · heat pump offline');live=false;stale=false}
+    return {label:label,live:live,stale:stale};
   }
   // ── room-model:end
 
@@ -2156,28 +2210,14 @@ a:focus-visible,button:focus-visible,input:focus-visible,select:focus-visible{ou
       setActive('wideVaneGrp', s.wideVane);
     }
 
-    roomTemp.textContent=fmtReadingTemp(s.room);
-    $('roomDeg').hidden=(s.room==null);
+    roomTemp.textContent=fmtReadingTemp(pumpRoom(s));
+    $('roomDeg').hidden=(pumpRoom(s)==null);
 
-    // Temperature source indicator — driven by the applied source + its own
-    // status (not the old BLE-only feed/stale flags) so Serin Link shows up
-    // and a stale feed of ANY source reads as stale, not as a live "Remote
-    // Sensor".
     var srcEl=$('tempSource');
     if(s.roomSource!==undefined){
-      var srcLive,srcStale,srcLabel;
-      if(s.roomMode===1){
-        var cN=contribCount(s);
-        if(s.avgFallback){srcLabel='Average · fallback';srcStale=true;srcLive=false}
-        else if(cN>0){srcLabel='Average · '+cN+' sensor'+(cN>1?'s':'');srcLive=true;srcStale=false}
-        else{srcLabel='Heat Pump Sensor';srcLive=false;srcStale=false}
-      }else{
-        srcStale=s.roomStatus===1;                // SL2_ROOMST_STALE
-        srcLive =s.roomSingle>0&&s.roomStatus===0;
-        srcLabel=memberName(s,s.roomSingle||0);
-      }
-      srcEl.className='temp-source active'+(srcLive?' remote':srcStale?' stale':'');
-      srcEl.textContent=srcLabel;
+      var src=tempSourceView(s);
+      srcEl.className='temp-source active'+(src.live?' remote':src.stale?' stale':'');
+      srcEl.textContent=src.label;
     }else{srcEl.className='temp-source'}
 
     if(s.operating){
@@ -2415,7 +2455,7 @@ a:focus-visible,button:focus-visible,input:focus-visible,select:focus-visible{ou
       var lBnr=$('linkBanner');
       if(bonded && s.roomSource===2 && s.linkStale){
         lBnr.textContent="No update from the Link for "+fmtSpan(Math.floor((s.linkStaleMs||0)/1000))+
-                         " — using the heat pump's internal sensor.";
+                         (pumpOffline(s)?'.':" — using the heat pump's internal sensor.");
         lBnr.style.display='flex';
       } else { lBnr.style.display='none'; }
 

@@ -263,6 +263,205 @@ same(DEFAULTS.target.min, '16', 'tempSlider ships in Celsius');
   checks += 2;
 }
 
+// ── Heat pump link down ────────────────────────────────────────────────────
+// Every remote feed and every room-temperature poll rides the CN105 link. With
+// it down, s.room is the LAST poll and nothing reaches the pump, yet the card
+// printed that stale number under "Heat pump sees", badged the selection
+// Active, and the Climate panel named the sensor in green. A bench unit not yet
+// wired to the indoor unit read as "my sensor is ignored". Sensor readings,
+// their ages and their own liveness dots are still true and must stay.
+{
+  const { newRoomRender } = require('./extract.js');
+  const ui = newRoomRender();
+  const SENSORS = [
+    { i: 0, name: 'Living Room', type: 'Govee', temp: 22.4, age: 12000, active: true, stale: false, batt: 80, rssi: -70 },
+    { i: 1, name: 'Bedroom', type: 'Govee', temp: 21.9, age: 40000, active: true, stale: false, batt: 90, rssi: -72 }
+  ];
+  const LIVE = {
+    connected: true, room: 22.5, roomMode: 0, roomSingle: 2, roomStatus: 0,
+    bleEnabled: true, bleSensors: SENSORS, hasLinkSensor: false
+  };
+  const OFF = Object.assign({}, LIVE, { connected: false, room: 20.5 });
+
+  // The pump's reading is withheld only on an explicit false: a frame that
+  // predates the field must keep rendering as before.
+  assert.strictEqual(ui.pumpRoom(OFF), null, 'no pump reading while the link is down');
+  assert.strictEqual(ui.pumpRoom(LIVE), 22.5, 'pump reading passes through while connected');
+  assert.strictEqual(ui.pumpRoom({ room: 20 }), 20, 'a frame without connected is not offline');
+  checks += 3;
+
+  // Hero: no number, one neutral line naming what will be sent.
+  let model = ui.roomSensors(OFF);
+  ui.renderRoomHero(OFF, model);
+  assert.strictEqual(ui.els.heroVal.textContent, '--', 'hero blanks while offline');
+  assert.strictEqual(ui.els.heroFoot.textContent,
+    'Not connected to the heat pump · Living Room will be sent when it reconnects',
+    'hero foot explains the link, not the sensor');
+  assert.strictEqual(ui.els.heroFoot.className, 'hero-foot', 'offline foot is neutral, not warn');
+  checks += 3;
+
+  ui.renderRoomHero(LIVE, ui.roomSensors(LIVE));
+  assert.strictEqual(ui.els.heroVal.textContent, '22.5', 'connected hero still shows the echoed value');
+  assert.strictEqual(ui.els.heroFoot.textContent, 'Living Room · updated 12s ago', 'connected foot unchanged');
+  checks += 2;
+
+  // Rows: the selection stays highlighted but is not "Active"; sensor dots
+  // keep meaning "this sensor is reporting", so a live selected sensor does
+  // not go grey next to a live unselected one.
+  const selRow = ui.roomRowHtml(OFF, model.find(m => m.bit === 2));
+  assert.ok(/class="src-row sel"/.test(selRow), 'selection highlight survives the outage');
+  assert.ok(selRow.indexOf('src-badge mut">Selected<') >= 0 && selRow.indexOf('>Active<') < 0,
+    'Active becomes a muted Selected while offline');
+  assert.ok(selRow.indexOf('status-dot active') >= 0, 'a live selected sensor keeps its live dot');
+  assert.ok(ui.roomRowHtml(OFF, model.find(m => m.bit === 3)).indexOf('status-dot active') >= 0,
+    'an unselected live sensor keeps its live dot too');
+  const intRow = model.find(m => m.bit === 0);
+  assert.strictEqual(intRow.temp, null, 'built-in row shows no reading while offline');
+  checks += 5;
+
+  // Fallback is a claim about what the pump reads; offline it cannot be made.
+  const staleOff = Object.assign({}, OFF, { roomStatus: 1 });
+  const staleModel = ui.roomSensors(staleOff);
+  const fbInt = ui.roomRowHtml(staleOff, staleModel.find(m => m.bit === 0));
+  assert.ok(fbInt.indexOf('In use') < 0 && !/class="src-row sel"/.test(fbInt) &&
+            fbInt.indexOf('status-dot idle') >= 0,
+    'built-in row is not "In use" while offline');
+  const fbSel = ui.roomRowHtml(staleOff, staleModel.find(m => m.bit === 2));
+  assert.ok(/class="src-row sel"/.test(fbSel) && fbSel.indexOf('Selected · stale') >= 0,
+    'a stale selection keeps its highlight and stale badge while offline');
+  // Not overridden by a live feed here, so only the link rule blanks it.
+  assert.strictEqual(staleModel.find(m => m.bit === 0).temp, null,
+    'built-in row shows no reading during an offline fallback');
+  assert.ok(fbInt.indexOf('src-temp') < 0, 'built-in row renders no temperature during an offline fallback');
+  checks += 4;
+
+  // Banner: the sensor trouble stays, the claim about the pump goes.
+  ui.renderRoomBanner(Object.assign({}, staleOff, { bleReverted: true }), staleModel);
+  assert.ok(/No update from Living Room/.test(ui.els.bleBanner.textContent) &&
+            !/built-in/.test(ui.els.bleBanner.textContent),
+    'offline stale banner drops "reverted to the built-in sensor": ' + ui.els.bleBanner.textContent);
+  ui.renderRoomBanner(staleOff, staleModel);
+  assert.ok(/No update from/.test(ui.els.bleBanner.textContent), 'connected-style stale banner still fires offline');
+  checks += 2;
+
+  const silentOff = Object.assign({}, OFF, {
+    roomSingle: 1, roomStatus: 2, remoteBonded: true, remoteLive: true
+  });
+  const silentModel = ui.roomSensors(silentOff);
+  ui.renderRoomBanner(silentOff, silentModel);
+  assert.strictEqual(ui.els.bleBanner.textContent, 'Serin Link is connected but hasn’t sent a reading yet.',
+    'offline no-reading banner drops "Using the heat pump\'s built-in sensor"');
+  ui.renderRoomHero(silentOff, silentModel);
+  assert.strictEqual(ui.els.heroFoot.textContent, 'Not connected to the heat pump',
+    'a selection with no reading promises nothing on reconnect');
+  checks += 2;
+
+  // Built-in selected: nothing is sent, so the foot and labels say only that.
+  const intOff = Object.assign({}, OFF, { roomSingle: 0 });
+  const intModel = ui.roomSensors(intOff);
+  const intSel = ui.roomRowHtml(intOff, intModel.find(m => m.bit === 0));
+  assert.ok(intSel.indexOf('status-dot idle') >= 0 && intSel.indexOf('src-badge mut">Selected<') >= 0,
+    'selected built-in row is idle and Selected while offline');
+  assert.strictEqual(intModel.find(m => m.bit === 0).temp, null,
+    'selected built-in row shows no reading while offline');
+  assert.ok(intSel.indexOf('src-temp') < 0, 'selected built-in row renders no temperature while offline');
+  checks += 2;
+  ui.renderRoomHero(intOff, intModel);
+  assert.strictEqual(ui.els.heroFoot.textContent, 'Not connected to the heat pump',
+    'built-in selection: no "will be sent" promise');
+  ui.renderRoomSummary(intOff, intModel);
+  assert.strictEqual(ui.els.roomStatusLabel.textContent, 'Heat pump offline',
+    'built-in selection header does not repeat "heat pump"');
+  checks += 3;
+
+  // Section header: neutral, names the selection and the link.
+  ui.renderRoomSummary(OFF, model);
+  assert.strictEqual(ui.els.roomDot.className, 'status-dot idle', 'header dot idle while offline');
+  assert.strictEqual(ui.els.roomStatusLabel.textContent, 'Living Room · Heat pump offline',
+    'header names the selection and the outage');
+  assert.strictEqual(ui.els.roomStatusLabel.style.color, 'var(--text3)', 'header label is neutral grey');
+  checks += 3;
+
+  // Average: no number, chips stay (they are sensor values), foot and header
+  // follow the same rule.
+  const avgOff = Object.assign({}, OFF, {
+    roomMode: 1, roomMembers: 0b1100, contrib: 0b1100, avgFeeding: true, effTemp: 22.15
+  });
+  const avgModel = ui.roomSensors(avgOff);
+  ui.renderRoomHero(avgOff, avgModel);
+  assert.strictEqual(ui.els.heroVal.textContent, '--', 'average hero blanks while offline');
+  assert.ok(/Living Room/.test(ui.els.heroChips.innerHTML) && /Bedroom/.test(ui.els.heroChips.innerHTML),
+    'average chips keep the sensor values');
+  assert.strictEqual(ui.els.heroFoot.textContent,
+    'Not connected to the heat pump · the average will be sent when it reconnects',
+    'average foot explains the link');
+  ui.renderRoomSummary(avgOff, avgModel);
+  assert.strictEqual(ui.els.roomStatusLabel.textContent, 'Average · Heat pump offline',
+    'average header names the outage');
+  checks += 4;
+
+  // Average with nothing reporting: no fallback chip or banner clause naming
+  // the pump's sensor, and the built-in row shows no reading.
+  const fbAvgOff = Object.assign({}, avgOff, {
+    contrib: 0, avgFeeding: false, avgFallback: true, exclStale: 0b1100
+  });
+  const fbAvgModel = ui.roomSensors(fbAvgOff);
+  assert.strictEqual(fbAvgModel.find(m => m.bit === 0).temp, null,
+    'average built-in row shows no reading while offline');
+  ui.renderRoomHero(fbAvgOff, fbAvgModel);
+  assert.ok(!/fallback/.test(ui.els.heroChips.innerHTML), 'no "Built-in sensor · fallback" chip while offline');
+  assert.strictEqual(ui.els.heroFoot.textContent, 'Not connected to the heat pump',
+    'average with no live member promises nothing on reconnect');
+  ui.renderRoomBanner(fbAvgOff, fbAvgModel);
+  assert.strictEqual(ui.els.bleBanner.textContent, 'No remote readings.',
+    'average fallback banner drops the built-in clause while offline');
+  ui.renderRoomSummary(fbAvgOff, fbAvgModel);
+  assert.strictEqual(ui.els.roomStatusLabel.textContent, 'Heat pump offline',
+    'average fallback header names only the outage');
+  checks += 5;
+
+  // Connected fallback keeps its existing copy.
+  const fbAvgOn = Object.assign({}, fbAvgOff, { connected: true });
+  ui.renderRoomBanner(fbAvgOn, ui.roomSensors(fbAvgOn));
+  assert.ok(/Using the heat pump's built-in sensor/.test(ui.els.bleBanner.textContent),
+    'connected average fallback banner is unchanged');
+  ui.renderRoomHero(fbAvgOn, ui.roomSensors(fbAvgOn));
+  assert.ok(/Built-in sensor · fallback/.test(ui.els.heroChips.innerHTML),
+    'connected average fallback chip is unchanged');
+  checks += 2;
+
+  // Climate panel source line under the Room reading.
+  assert.deepStrictEqual(ui.tempSourceView(LIVE), { label: 'Living Room', live: true, stale: false },
+    'connected source line is unchanged');
+  assert.deepStrictEqual(ui.tempSourceView(OFF),
+    { label: 'Living Room · heat pump offline', live: false, stale: false },
+    'offline source line drops the green and names the outage');
+  assert.deepStrictEqual(ui.tempSourceView(intOff),
+    { label: 'Heat pump offline', live: false, stale: false },
+    'built-in selection source line does not repeat "heat pump"');
+  assert.deepStrictEqual(ui.tempSourceView(avgOff),
+    { label: 'Average · 2 sensors · heat pump offline', live: false, stale: false },
+    'average source line names the outage');
+  checks += 4;
+}
+
+// The Climate panel lines live in onState(), outside the extracted block, so
+// pin that they go through the helpers above.
+{
+  const fs = require('fs');
+  const path = require('path');
+  const src = fs.readFileSync(path.join(__dirname, '..', '..', 'web', 'index.html'), 'utf8');
+  assert.ok(/roomTemp\.textContent\s*=\s*fmtReadingTemp\(\s*pumpRoom\(\s*s\s*\)\s*\)/.test(src),
+    'Climate Room reading must go through pumpRoom()');
+  assert.ok(/\$\('roomDeg'\)\.hidden\s*=\s*\(\s*pumpRoom\(\s*s\s*\)\s*==\s*null\s*\)/.test(src),
+    'Climate degree sign must hide with the pumpRoom() reading');
+  assert.ok(/tempSourceView\(\s*s\s*\)/.test(src.slice(src.indexOf('function onState('))),
+    'Climate source line must go through tempSourceView()');
+  assert.ok(/pumpOffline\(\s*s\s*\)\s*\?\s*'\.'\s*:\s*" — using the heat pump's internal sensor\."/.test(src),
+    'Link card stale banner must drop the internal-sensor clause while offline');
+  checks += 4;
+}
+
 // The merge above is only reachable because onState() actually calls it, and
 // that line lives outside the extracted block — deleting it would leave every
 // test here green while restoring the bug. Pin it on the source text, the same
