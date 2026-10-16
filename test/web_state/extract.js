@@ -124,7 +124,7 @@ const roomFactory = vm.runInThisContext(
 const roomRenderFactory = vm.runInThisContext(
   '(function(){return function(){\n' +
   '  var tempUnit="F";\n' +
-  '  function fmtReadingTemp(c){return String(c)}\n' +
+  '  function fmtReadingTemp(c){return c==null?"--":String(c)}\n' +
   '  function fmtAgo(sec){return (sec<60?sec+"s":sec<3600?Math.floor(sec/60)+"m":Math.floor(sec/3600)+"h")+" ago"}\n' +
   '  var els={};\n' +
   '  function $(id){if(!els[id])els[id]={textContent:"",className:"",innerHTML:"",style:{},\n' +
@@ -133,7 +133,8 @@ const roomRenderFactory = vm.runInThisContext(
   block('room-model') + '\n' +
   '  return {els:els,roomSensors:roomSensors,roomRowHtml:roomRowHtml,\n' +
   '    renderRoomHero:renderRoomHero,renderRoomBanner:renderRoomBanner,\n' +
-  '    renderRoomSummary:renderRoomSummary,MEMBER_LINK:MEMBER_LINK};\n' +
+  '    renderRoomSummary:renderRoomSummary,pumpRoom:pumpRoom,\n' +
+  '    tempSourceView:tempSourceView,MEMBER_LINK:MEMBER_LINK};\n' +
   '};})',
   { filename: 'web/index.html#room-model' }
 )();
@@ -151,7 +152,8 @@ for (const name of ['setRoomMode', 'selectRoomSingle', 'toggleRoomMember']) {
 if (typeof mergeState !== 'function')
   throw new Error('state-merge block does not define mergeState()');
 const renderProbe = roomRenderFactory();
-for (const name of ['roomSensors', 'roomRowHtml', 'renderRoomHero', 'renderRoomBanner', 'renderRoomSummary']) {
+for (const name of ['roomSensors', 'roomRowHtml', 'renderRoomHero', 'renderRoomBanner',
+                    'renderRoomSummary', 'pumpRoom', 'tempSourceView']) {
   if (typeof renderProbe[name] !== 'function')
     throw new Error(`room-model block does not define ${name}()`);
 }
