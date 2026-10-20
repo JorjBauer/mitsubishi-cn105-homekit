@@ -38,7 +38,9 @@ A SET command (type `0x41`) that overrides the heat pump's internal thermistor w
 
 Both encodings are sent in the same packet — the heat pump uses whichever it supports. Temperature is rounded to the nearest 0.5°C.
 
-The unit keeps the last remote temperature it was fed when the controller restarts. On the first connection after boot, when the first poll cycle ends, the controller sends one disable packet unless a room source has already written the register since boot. A source that starts feeding later simply overrides it.
+The unit keeps the last remote temperature it was fed when the controller restarts. A device that has ever fed one (NVS `remoteFed`, latched on the first send; on upgrade derived from a stored remote room source) sends one disable packet on the first connection after boot, when the first poll cycle ends, unless a room source has already written the register since boot. A source that starts feeding later simply overrides it.
+
+A device that has never fed the pump leaves the register alone. On a unit with a Mitsubishi wall controller (MHK, PAR) that register carries the controller's own room sensor, and a disable packet would hand the unit back to its internal thermistor.
 
 ## Serin Link Bonds
 

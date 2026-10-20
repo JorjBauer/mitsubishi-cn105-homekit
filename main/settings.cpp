@@ -444,6 +444,22 @@ void SettingsStore::begin() {
     nvs_get_u64(_handle, "roomSrcId", &_settings.roomSourceId);
     _settings.roomSourceId = room_source_id_derived(_settings);
 
+    // remoteFed — has this device ever fed the pump a remote temperature?
+    // Gates the first-connect clear: only a controller that wrote the register
+    // can have left a stale value in it, and on a unit whose wall controller
+    // owns that register a clear would take its room sensor away. Latched by
+    // main.cpp on the first send. Absent on older firmware: a stored remote
+    // selection means this device has been feeding, so derive it from that.
+    {
+        uint8_t val = 0;
+        if (nvs_get_u8(_handle, "remoteFed", &val) == ESP_OK) {
+            _settings.remoteEverFed = (val != 0);
+        } else {
+            _settings.remoteEverFed = (_settings.roomMode != 0) ||
+                                      (_settings.roomSingle != ROOM_MEMBER_INTERNAL);
+        }
+    }
+
     LOG_INFO("[Settings] Loaded: logLevel=%d poll=%lums baud=%lu name=%s unit=%s room mode=%u single=%u members=0x%02X",
              _settings.logLevel, (unsigned long)_settings.pollMs,
              (unsigned long)_settings.cn105Baud, _settings.deviceName,
@@ -548,6 +564,7 @@ void SettingsStore::save() {
     nvs_set_u8(_handle, "betaChan", _settings.betaChannel ? 1 : 0);
     nvs_set_str(_handle, "setupCode", _settings.setupCode);
     nvs_set_u8(_handle, "hkPaired", _settings.homekitPaired ? 1 : 0);
+    nvs_set_u8(_handle, "remoteFed", _settings.remoteEverFed ? 1 : 0);
     nvs_set_u8(_handle, "wifiChgPend", _settings.wifiChangePending ? 1 : 0);
     nvs_set_u8(_handle, "vaneConfig", _settings.vaneConfig);
     nvs_set_u8(_handle, "modeMask", _settings.modeMask);

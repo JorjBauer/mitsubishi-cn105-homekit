@@ -29,8 +29,21 @@ int main(int, char** argv) {
   pump.responding=true;now_ms+=4000;int before=pump.infos;ticks(c);
   CHECK(c.isHealthy());CHECK(pump.infos>=before+5);
  }
- CASE("first_connect_clears_when_no_source_feeds") {
-  now_ms=5000;c.begin(&pump);ticks(c);
+ CASE("remote_written_since_boot_latches_on_first_send") {
+  // main.cpp persists "this device has fed the pump" off this flag; a bare
+  // boot, polling included, must not trip it.
+  now_ms=5000;c.begin(&pump);ticks(c,100,100);CHECK(!c.remoteWrittenSinceBoot());
+  c.sendRemoteTemperature(21);CHECK(c.remoteWrittenSinceBoot());
+  ticks(c,100,100);CHECK(c.remoteWrittenSinceBoot());
+ }
+ CASE("first_connect_no_clear_unless_enabled") {
+  // Default: a device that was never told it fed the pump leaves the
+  // register alone — it may belong to a wall controller, not to us.
+  now_ms=5000;c.begin(&pump);ticks(c,100,100);
+  CHECK(c.isHealthy());CHECK(pump.remoteClears==0);CHECK(pump.remoteSets==0);
+ }
+ CASE("first_connect_clears_when_enabled_and_no_source_feeds") {
+  now_ms=5000;c.enableBootClear(true);c.begin(&pump);ticks(c);
   CHECK(pump.infos==5);            // the first poll still runs straight after the handshake
   CHECK(pump.remoteClears==1);CHECK(pump.remoteSets==0);
   ticks(c,100,100);CHECK(pump.remoteClears==1);
@@ -39,11 +52,11 @@ int main(int, char** argv) {
   CHECK(c.isHealthy());CHECK(pump.remoteClears==1);   // first connect after boot only
  }
  CASE("first_connect_no_clear_when_source_feeds") {
-  now_ms=5000;c.sendRemoteTemperature(21);c.begin(&pump);ticks(c,100,100);
+  now_ms=5000;c.enableBootClear(true);c.sendRemoteTemperature(21);c.begin(&pump);ticks(c,100,100);
   CHECK(pump.remoteSets==1);CHECK(pump.remoteClears==0);
  }
  CASE("first_connect_no_clear_when_source_starts_during_first_poll") {
-  now_ms=5000;c.begin(&pump);c.loop();now_ms+=10;c.loop();CHECK(c.isConnected());
+  now_ms=5000;c.enableBootClear(true);c.begin(&pump);c.loop();now_ms+=10;c.loop();CHECK(c.isConnected());
   c.sendRemoteTemperature(21);ticks(c,100,100);
   CHECK(pump.remoteSets==1);CHECK(pump.remoteClears==0);
  }

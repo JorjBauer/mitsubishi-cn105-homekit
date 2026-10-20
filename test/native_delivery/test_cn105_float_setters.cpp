@@ -33,8 +33,10 @@ struct Snapshot {
  }
 };
 
+// These cases exercise the boot clear's interplay with bad input, so the
+// controller is told it may clear (production: a device that has fed before).
 static void connect(CN105Controller& c,RecordingPump& pump) {
- now_ms=5000;c.begin(&pump);ticks(c,20);
+ now_ms=5000;c.enableBootClear(true);c.begin(&pump);ticks(c,20);
  CHECK(c.isConnected());CHECK(pump.remoteClears==1);CHECK(!c._cycleRunning);
 }
 
