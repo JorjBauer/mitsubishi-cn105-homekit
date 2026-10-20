@@ -464,28 +464,37 @@ button.wifi-row:active{background:var(--surface3);}
 .fw-ver-btn[aria-expanded="true"] svg{transform:rotate(180deg);}
 .fw-ver-btn.update{background:color-mix(in srgb,var(--orange) 18%,var(--surface2));color:var(--orange);}
 .fw-ver-btn:disabled{opacity:.55;cursor:default;}
-.fw-ver-menu{position:absolute;right:12px;z-index:5;width:min(300px,calc(100% - 24px));max-height:340px;overflow:auto;
+.fw-ver-menu{position:absolute;right:8px;z-index:5;width:min(340px,calc(100% - 16px));max-height:340px;overflow:auto;
   overscroll-behavior:contain;background:var(--surface2);border-radius:16px;padding:6px 0;
   box-shadow:0 18px 44px -10px rgba(0,0,0,.45),0 0 0 1px var(--border);}
-.fw-ver-head{font-size:11.5px;font-weight:500;color:var(--text2);text-transform:uppercase;letter-spacing:.5px;padding:8px 16px 4px;}
+.fw-ver-head{font-size:11.5px;font-weight:500;color:var(--text2);text-transform:uppercase;letter-spacing:.5px;padding:8px 14px 4px;}
 .fw-ver-sep{height:1px;background:var(--sep);margin:6px 0;}
-.fw-ver-row{display:flex;align-items:center;gap:7px;width:100%;min-height:42px;border:none;background:none;padding:9px 16px;
+.fw-ver-row{display:flex;align-items:center;gap:6px;width:100%;min-height:42px;border:none;background:none;padding:9px 14px;
   font-family:inherit;color:var(--text);text-align:left;cursor:pointer;}
 .fw-ver-row:hover,.fw-ver-row:focus-visible{background:var(--surface3);outline:none;}
 .fw-ver-row[aria-disabled="true"]{cursor:default;}
 .fw-ver-row[aria-disabled="true"]:hover{background:none;}
-.fw-ver-row .v{font-family:ui-monospace,Menlo,monospace;font-size:13.5px;}
-.fw-ver-row .d{margin-left:auto;padding-left:8px;font-size:12px;color:var(--text2);font-variant-numeric:tabular-nums;white-space:nowrap;}
-.fw-tag{font-size:10.5px;font-weight:600;line-height:1;padding:3px 6px;border-radius:5px;letter-spacing:.2px;}
+.fw-ver-row .v{flex:none;white-space:nowrap;font-family:ui-monospace,Menlo,monospace;font-size:13.5px;}
+/* The date takes what the version and tags leave. When the whole date does
+   not fit (a beta that is also installed, on the narrowest phones) it wraps
+   onto a second line that the fixed height clips, so it disappears instead of
+   colliding or showing half a month: the empty ::before item grows to push it
+   right while it fits, and lets it wrap as soon as it doesn't. (::before needs
+   the line's height, or its empty first line is 0 tall and line 2 shows.) */
+.fw-ver-row .d{flex:1 1 0;min-width:0;display:flex;flex-wrap:wrap;align-content:flex-start;justify-content:flex-end;
+  height:16px;line-height:16px;overflow:hidden;padding-left:6px;font-size:12px;color:var(--text2);
+  font-variant-numeric:tabular-nums;white-space:nowrap;}
+.fw-ver-row .d::before{content:"";flex:1 1 0;height:16px;}
+.fw-tag{flex:none;white-space:nowrap;font-size:10.5px;font-weight:600;line-height:1;padding:3px 6px;border-radius:5px;letter-spacing:.2px;}
 .fw-tag.latest{color:var(--orange);background:color-mix(in srgb,var(--orange) 16%,transparent);}
 .fw-tag.beta{color:var(--red);background:color-mix(in srgb,var(--red) 15%,transparent);}
 .fw-tag.installed{color:var(--accent);background:color-mix(in srgb,var(--accent) 15%,transparent);}
-.fw-ver-msg{display:flex;flex-direction:column;align-items:flex-start;gap:10px;padding:12px 16px;font-size:13px;color:var(--text2);}
+.fw-ver-msg{display:flex;flex-direction:column;align-items:flex-start;gap:10px;padding:12px 14px;font-size:13px;color:var(--text2);}
 .fw-ver-msg .spin-row{display:flex;align-items:center;gap:9px;}
 .fw-ver-msg svg{width:15px;height:15px;}
 .fw-ver-retry{border:none;background:var(--surface3);color:var(--accent);font-family:inherit;font-size:13px;font-weight:600;
   padding:7px 12px;border-radius:9px;cursor:pointer;}
-.fw-ver-foot{display:flex;align-items:center;gap:5px;padding:10px 16px 8px;font-size:13px;color:var(--accent);text-decoration:none;}
+.fw-ver-foot{display:flex;align-items:center;gap:5px;padding:10px 14px 8px;font-size:13px;color:var(--accent);text-decoration:none;}
 .fw-ver-foot svg{width:11px;height:11px;}
 .fw-manual{margin-top:14px;padding-top:14px;border-top:1px solid var(--sep);}
 .fw-file-row{display:flex;gap:9px;align-items:center;}
