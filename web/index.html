@@ -1020,6 +1020,11 @@ a:focus-visible,button:focus-visible,input:focus-visible,select:focus-visible{ou
             <button data-v="9600" onclick="pickSetting(this)">9600</button>
           </div>
         </div>
+        <div class="inset-block" style="padding:13px 0">
+          <div class="lbl">Trusted Hostname</div>
+          <div class="sub" style="margin:2px 0 10px;max-width:none">To reach this page by a name on your own DNS (like minisplit.example.com), enter it here exactly. Without it, the device only answers to its IP address and its .local name, so other websites can't control it. Applied on Save Settings.</div>
+          <input type="text" id="cfgTrustedHost" maxlength="63" placeholder="none" autocapitalize="off" autocorrect="off" spellcheck="false" aria-label="Trusted hostname" style="width:100%;box-sizing:border-box;padding:8px 10px;border:1px solid var(--border);border-radius:8px;background:var(--surface2);color:var(--text);font-size:15px;font-family:inherit">
+        </div>
         <p class="setting-caption" style="margin:8px 0 10px">
           Factory reset erases everything — Wi-Fi credentials, HomeKit pairing, paired Link, and all settings — and restarts the device into setup mode. This cannot be undone.
         </p>
@@ -2357,6 +2362,7 @@ a:focus-visible,button:focus-visible,input:focus-visible,select:focus-visible{ou
     if(!settingsDirty){
       if(s.deviceName&&!$('cfgDeviceName').matches(':focus')) $('cfgDeviceName').value=s.deviceName;
       if(s.pollInterval!=null&&!$('cfgPoll').matches(':focus')) $('cfgPoll').value=s.pollInterval;
+      if(s.trustedHost!=null&&!$('cfgTrustedHost').matches(':focus')) $('cfgTrustedHost').value=s.trustedHost;
       if(s.vaneConfig!=null) setActive('vaneTypeGrp',String(s.vaneConfig));
       if(s.cn105Baud!=null) setActive('baudGrp',String(s.cn105Baud));
       if(s.modeMask!=null) applyCapMask(s.modeMask);
@@ -3339,7 +3345,8 @@ a:focus-visible,button:focus-visible,input:focus-visible,select:focus-visible{ou
       pollInterval:parseInt($('cfgPoll').value),
       cn105Baud:baud,
       vaneConfig:parseInt(getSegVal('vaneTypeGrp')),
-      modeMask:getCapMask()
+      modeMask:getCapMask(),
+      trustedHost:$('cfgTrustedHost').value.trim().toLowerCase()
     });
     if(ok) settingsDirty=false;
     var baudChanged=ok&&lastState&&lastState.cn105Baud!=null&&lastState.cn105Baud!==baud;
@@ -3949,6 +3956,7 @@ a:focus-visible,button:focus-visible,input:focus-visible,select:focus-visible{ou
   $('cfgPass').addEventListener('input',checkWifiFields);
   $('cfgDeviceName').addEventListener('input',function(){settingsDirty=true;});
   $('cfgPoll').addEventListener('input',function(){settingsDirty=true;});
+  $('cfgTrustedHost').addEventListener('input',function(){settingsDirty=true;});
 
   // ── Init ───────────────────────────────────────────────────────────────────
   initCollapsibleSections();

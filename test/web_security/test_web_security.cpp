@@ -54,6 +54,19 @@ int main() {
     assert(webHostAllowed("192.168.4.1", nullptr, nullptr)); checks++;
     assert(!webHostAllowed("Display-Label.local", "", "Serin-AB12")); checks++;
     assert(webHostAllowed("Other-Name.local", "", "Other-Name")); checks++;
+    assert(webHostAllowed("minisplit.example.com", "", "", "minisplit.example.com")); checks++;
+    assert(webHostAllowed("192.168.4.1", "", "", "")); checks++;
+    assert(!webHostAllowed("minisplit.example.com", "", "", "")); checks++;
+    assert(!webHostAllowed("minisplit.example.com:81", "", "", "minisplit.example.com")); checks++;
+    for (const char *ok : {"", "minisplit.example.com", "minisplit", "10.0.0.5"}) {
+        assert(webTrustedHostValid(ok, 64)); checks++;
+    }
+    for (const char *bad : {"minisplit.example.com:80", "http://minisplit", "mini split",
+                            "[fe80::1]", ".example.com", "example.com.", "a/b", "evil\"x"}) {
+        assert(!webTrustedHostValid(bad, 64)); checks++;
+    }
+    assert(!webTrustedHostValid(nullptr, 64)); checks++;
+    assert(!webTrustedHostValid("abcdefgh", 8)); checks++;   // no room for the NUL
     BAD("http://192.168.1.50:garbage", "192.168.1.50");
     BAD("http://[fe80::1]garbage", "[fe80::1]");
     BAD("http://192.168.1.50", "192.168.1.50:80x");

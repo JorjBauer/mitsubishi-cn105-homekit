@@ -59,13 +59,16 @@ inline bool webHostOnly(const char *authority, size_t len, char *out, size_t out
 
 // DNS rebinding guard for every HTTP request, including requests without
 // Origin. HTTP serves port 80. Only the current STA IP, configured mDNS hostname
-// (bare or .local), and the default recovery AP IP may address this server.
-inline bool webHostAllowed(const char *host, const char *staIP, const char *mdnsHostname) {
+// (bare or .local), the default recovery AP IP, and the user's one trusted
+// hostname (exact match, e.g. a name on their own DNS) may address this server.
+inline bool webHostAllowed(const char *host, const char *staIP, const char *mdnsHostname,
+                           const char *trustedHost = nullptr) {
     char name[96];
     unsigned port;
     if (!host || !webHostOnly(host, strlen(host), name, sizeof(name), &port) ||
         (port != 0 && port != 80)) return false;
     if (strcmp(name, "192.168.4.1") == 0) return true;
+    if (trustedHost && trustedHost[0] && strcasecmp(name, trustedHost) == 0) return true;
     if (staIP && staIP[0] && strcmp(staIP, "0.0.0.0") != 0 && strcmp(name, staIP) == 0)
         return true;
     if (!mdnsHostname || !mdnsHostname[0]) return false;
@@ -73,6 +76,18 @@ inline bool webHostAllowed(const char *host, const char *staIP, const char *mdns
     size_t n = strlen(mdnsHostname);
     return strlen(name) == n + 6 && strncasecmp(name, mdnsHostname, n) == 0 &&
            strcasecmp(name + n, ".local") == 0;
+}
+
+// What the trusted hostname setting accepts: a bare DNS name, no port, no
+// brackets, short enough for its settings field. Empty clears it.
+inline bool webTrustedHostValid(const char *s, size_t cap) {
+    if (!s) return false;
+    size_t n = strlen(s);
+    if (n == 0) return true;
+    char name[96];
+    unsigned port = 0;
+    return n < cap && s[0] != '[' && s[0] != '.' && s[n - 1] != '.' &&
+           webHostOnly(s, n, name, sizeof(name), &port) && port == 0;
 }
 
 // Additional same-host Origin rule, after the Host allowlist passes. No Origin

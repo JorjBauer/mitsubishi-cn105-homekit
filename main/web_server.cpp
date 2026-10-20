@@ -117,7 +117,7 @@ static bool requestHostAllowed(httpd_req_t *req) {
     if (WifiManager::isConnected()) WifiManager::getIP(staIP, sizeof(staIP));
     return hl > 0 && hl < sizeof(host) &&
            httpd_req_get_hdr_value_str(req, "Host", host, sizeof(host)) == ESP_OK &&
-           webHostAllowed(host, staIP, WifiManager::getHostname());
+           webHostAllowed(host, staIP, WifiManager::getHostname(), settings.get().trustedHost);
 }
 
 static void serveCNAPage(httpd_req_t *req);
@@ -200,7 +200,7 @@ bool WebUI::requireSameOrigin(httpd_req_t *req) {
     bool ok = ol < sizeof(origin) && hl > 0 && hl < sizeof(host) &&
               (ol == 0 || httpd_req_get_hdr_value_str(req, "Origin", origin, sizeof(origin)) == ESP_OK) &&
               httpd_req_get_hdr_value_str(req, "Host", host, sizeof(host)) == ESP_OK &&
-              webHostAllowed(host, staIP, hostname) &&
+              webHostAllowed(host, staIP, hostname, settings.get().trustedHost) &&
               webOriginAllowed(origin, host);
     if (!ok) {
         LOG_WARN("Rejected request to %s (Host: %.60s, Origin: %.60s)", req->uri, host, origin);
