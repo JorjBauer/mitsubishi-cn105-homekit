@@ -3499,17 +3499,22 @@ a:focus-visible,button:focus-visible,input:focus-visible,select:focus-visible{ou
   //
   // One Entry per release this board can install, newest first. An index row
   // is skipped unless it is installable as written: a version that starts with
-  // a digit, a build for this board, and that build's path and sha256.
+  // a digit, a build for this board, and that build's path and sha256. Unlike
+  // the manifests' builds array, a row's builds is an object keyed by board:
+  //   {version, date, release_url, builds: {nanoc6: {path, sha256}, ...}}
   // binUrl is relative to the index, like the manifests' part paths.
   function readVersions(idx,indexUrl,board){
     var out=[],vs=idx&&idx.versions;
     if(!Array.isArray(vs))return out;
     var base=String(indexUrl).slice(0,String(indexUrl).lastIndexOf('/')+1);
     vs.forEach(function(r){
-      if(!r||!/^\d/.test(String(r.version))||!Array.isArray(r.builds))return;
-      var b=null;
-      r.builds.forEach(function(x){if(x&&x.board===board)b=x});
-      if(!b||!b.path||!/^[0-9a-f]{64}$/i.test(String(b.sha256)))return;
+      if(!r||!/^\d/.test(String(r.version)))return;
+      var bs=r.builds;
+      if(!bs||typeof bs!=='object'||Array.isArray(bs))return;
+      // Own property only: a board named constructor or __proto__ must not
+      // resolve to something on the prototype chain.
+      var b=Object.prototype.hasOwnProperty.call(bs,board)?bs[board]:null;
+      if(!b||typeof b.path!=='string'||!b.path||!/^[0-9a-f]{64}$/i.test(String(b.sha256)))return;
       out.push({
         version:String(r.version),
         date:String(r.date||''),

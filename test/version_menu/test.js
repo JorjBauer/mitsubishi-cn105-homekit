@@ -3,22 +3,28 @@ const { readVersions, menuModel } = require('./extract.js');
 
 const URL = 'https://h/x/firmware/homekit/versions.json';
 const sha = c => c.repeat(64);
-const build = (board, ver, c) => ({
-  board, path: 'archive/' + ver + '/' + board + '/firmware.bin', sha256: sha(c)
+const build = (ver, board, c) => ({
+  path: 'archive/' + ver + '/' + board + '/firmware.bin', sha256: sha(c)
 });
-const rel = (ver, builds, date) => ({ version: ver, date: date || '2026-01-01', builds });
+// The real index shape: a row's builds is an object keyed by board name, and
+// the row carries a release_url that Entry must not pick up.
+const rel = (ver, builds, date) => ({
+  version: ver, date: date || '2026-01-01',
+  release_url: 'https://github.com/o/r/releases/tag/v' + ver, builds
+});
 
 // Scrambled on purpose: readVersions owns the ordering.
 const INDEX = {
   name: 'Mitsubishi HomeKit Controller',
   versions: [
-    rel('0.2.7', [build('nanoc6', '0.2.7', 'a')]),
-    rel('0.2.9-beta.1', [build('nanoc6', '0.2.9-beta.1', 'b')]),
-    rel('0.2', [build('nanoc6', '0.2', 'c')]),
-    rel('0.2.8', [build('nanoc6', '0.2.8', 'd'), build('m5atoms3-lite', '0.2.8', 'e')]),
-    rel('0.2.6-beta.4', [build('nanoc6', '0.2.6-beta.4', 'f')]),
-    rel('0.2.5', [build('m5atoms3-lite', '0.2.5', '1')]),            // no nanoc6 build
-    rel('0.2.4', [{ board: 'nanoc6', path: 'archive/0.2.4/nanoc6/firmware.bin', sha256: 'zz' }])
+    rel('0.2.7', { nanoc6: build('0.2.7', 'nanoc6', 'a') }),
+    rel('0.2.9-beta.1', { nanoc6: build('0.2.9-beta.1', 'nanoc6', 'b') }),
+    rel('0.2', { nanoc6: build('0.2', 'nanoc6', 'c') }),
+    rel('0.2.8', { 'm5atoms3-lite': build('0.2.8', 'm5atoms3-lite', 'e'),
+                   nanoc6: build('0.2.8', 'nanoc6', 'd') }),
+    rel('0.2.6-beta.4', { nanoc6: build('0.2.6-beta.4', 'nanoc6', 'f') }),
+    rel('0.2.5', { 'm5atoms3-lite': build('0.2.5', 'm5atoms3-lite', '1') }),   // no nanoc6 build
+    rel('0.2.4', { nanoc6: { path: 'archive/0.2.4/nanoc6/firmware.bin', sha256: 'zz' } })
   ]
 };
 
@@ -38,14 +44,37 @@ assert.deepStrictEqual(list[1], {
 assert.strictEqual(readVersions(INDEX, URL, 'm5atoms3-lite')[1].version, '0.2.5');
 assert.deepStrictEqual(readVersions(INDEX, URL, 'esp32'), []);
 
-// Defensive skips: bad version, missing path, junk entries, non-array builds.
+// Defensive skips: bad version, missing path or sha256, junk rows, builds that
+// is an array (the manifests' shape, not the index's), null, or a string.
 assert.deepStrictEqual(readVersions({versions: [
-  rel('latest', [build('nanoc6', 'latest', 'a')]),
-  rel('1.0.0', [{ board: 'nanoc6', sha256: sha('a') }]),
-  rel('1.0.1', 'nope'),
+  rel('latest', { nanoc6: build('latest', 'nanoc6', 'a') }),
+  rel('1.0.0', { nanoc6: { sha256: sha('a') } }),
+  rel('1.0.1', { nanoc6: { path: 'archive/1.0.1/nanoc6/firmware.bin' } }),
+  rel('1.0.2', { nanoc6: null }),
+  rel('1.0.3', 'nope'),
+  rel('1.0.4', null),
+  rel('1.0.5', [{ board: 'nanoc6', path: 'archive/1.0.5/nanoc6/firmware.bin', sha256: sha('a') }]),
+  rel('1.0.6', { 'm5atoms3-lite': build('1.0.6', 'm5atoms3-lite', 'a') }),   // other board only
   null, 7, {},
-  rel('1.0.2', [null, build('nanoc6', '1.0.2', 'a')])
-]}, URL, 'nanoc6').map(e => e.version), ['1.0.2']);
+  rel('1.0.9', { nanoc6: build('1.0.9', 'nanoc6', 'a') })
+]}, URL, 'nanoc6').map(e => e.version), ['1.0.9']);
+assert.deepStrictEqual(readVersions({versions: [
+  rel('1.0.0', { nanoc6: build('1.0.0', 'nanoc6', 'a') })
+]}, URL, 'm5atoms3-lite'), []);
+
+// Board lookup is by own property: a board named like an Object.prototype member
+// never matches, even when the prototype is polluted with a path and a sha256.
+['constructor', '__proto__', 'toString', 'hasOwnProperty'].forEach(b =>
+  assert.deepStrictEqual(readVersions(INDEX, URL, b), []));
+Object.defineProperty(Object.prototype, 'path', { value: 'evil', configurable: true });
+Object.defineProperty(Object.prototype, 'sha256', { value: sha('9'), configurable: true });
+try {
+  assert.deepStrictEqual(readVersions(INDEX, URL, '__proto__'), []);
+  assert.deepStrictEqual(readVersions(INDEX, URL, 'constructor'), []);
+} finally {
+  delete Object.prototype.path;
+  delete Object.prototype.sha256;
+}
 
 let m = menuModel(list, '0.2.6-beta.4', false);
 assert.strictEqual(m.offer.version, '0.2.8');
