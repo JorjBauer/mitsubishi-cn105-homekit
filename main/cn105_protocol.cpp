@@ -695,7 +695,7 @@ void CN105Controller::processPacket(const uint8_t *pkt, uint8_t len) {
             // A new handshake always starts a fresh poll immediately. Do not
             // retain a pre-disconnect cycle timestamp or SET deferral.
             _lastCycleEnd = uptime_ms() - _updateInterval;
-            if (_bootClear != BOOT_CLEAR_DONE) _bootClear = BOOT_CLEAR_ARMED;
+            if (_bootClearEnabled && _bootClear != BOOT_CLEAR_DONE) _bootClear = BOOT_CLEAR_ARMED;
             break;
 
         case CN105_PKT_SET_ACK:

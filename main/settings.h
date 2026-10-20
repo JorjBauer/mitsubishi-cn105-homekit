@@ -68,6 +68,10 @@ struct DeviceSettings {
     bool     betaChannel = false;      // Update check also reads the beta manifest
     char     setupCode[9] = "";        // HomeKit pairing code (8 digits)
     bool     homekitPaired = false;    // Latched until an explicit pairing reset
+    // This device has fed the heat pump a remote temperature at some point.
+    // Latched for good on the first send (main.cpp); gates the first-connect
+    // clear of a value the pump kept across a restart (cn105 enableBootClear).
+    bool     remoteEverFed = false;
     bool     wifiChangePending = false; // True after WiFi creds changed via web UI (shorter fallback timeout)
     uint8_t  vaneConfig = 2;          // 0=no vanes, 1=vertical only, 2=vertical+horizontal
     uint8_t  modeMask = MODE_CAP_ALL; // MODE_CAP_* bits — operating modes this unit supports (mode_caps.h)

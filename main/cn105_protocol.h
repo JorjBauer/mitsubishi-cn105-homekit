@@ -260,6 +260,23 @@ public:
     /// Callers validate with cn105_baud_valid() first.
     void setBaudRate(uint32_t baud);
 
+    /// Allow the first-connect clear of a remote temperature the pump kept
+    /// across a controller restart. Off by default: only a device that has
+    /// fed the pump itself may have left such a value behind, and on a unit
+    /// with a wall controller the register is that controller's to own.
+    /// Call before begin(); read by the CN105 task on CONNECT_OK.
+    void enableBootClear(bool enabled) { _bootClearEnabled = enabled; }
+
+    /// True once any source has sent or cleared a remote temperature through
+    /// this controller since boot. main.cpp latches it into NVS so the next
+    /// boot knows this device, not a wall controller, owns the register.
+    bool remoteWrittenSinceBoot() const {
+        taskENTER_CRITICAL(&_mux);
+        const bool w = _remoteWritten;
+        taskEXIT_CRITICAL(&_mux);
+        return w;
+    }
+
     /// Communication-loss timeout: 6 × the runtime poll interval, floored at
     /// the compile-time default. The poll interval is user-settable up to
     /// 30 s; a fixed 12 s timeout would falsely declare the link dead there.
@@ -360,6 +377,7 @@ private:
     // connection's first poll cycle ends, so the handshake still polls first.
     enum : uint8_t { BOOT_CLEAR_IDLE, BOOT_CLEAR_ARMED, BOOT_CLEAR_POLLING, BOOT_CLEAR_DONE };
     uint8_t  _bootClear = BOOT_CLEAR_IDLE;
+    bool     _bootClearEnabled = false;   // enableBootClear(); set before begin()
 
     // ── RX buffer ───────────────────────────────────────────────────────────
     uint8_t  _rxBuf[32];

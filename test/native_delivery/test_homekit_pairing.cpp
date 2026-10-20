@@ -5,6 +5,23 @@ static bool storedPaired(){auto& ns=hkNvs.committed["ac-settings"];return ns.cou
 static void reboot(){settings=SettingsStore{};hkNvs.pending.clear();settings.begin();controllers=0;s_started=false;s_pairingsReset=false;}
 int main(int,char**argv){
  settings.begin();
+ CASE("remote_fed_defaults_false_on_fresh_device") {
+  CHECK(!settings.get().remoteEverFed);
+  settings.save();reboot();CHECK(!settings.get().remoteEverFed);
+ }
+ CASE("remote_fed_derived_from_stored_remote_selection") {
+  // Upgrading from a build without the key: a stored remote source means this device fed the pump.
+  hkNvs.committed["ac-settings"]["roomSingle"]={ROOM_MEMBER_LINK};
+  reboot();CHECK(settings.get().roomSingle==ROOM_MEMBER_LINK);CHECK(settings.get().remoteEverFed);
+ }
+ CASE("remote_fed_derived_from_stored_average_mode") {
+  hkNvs.committed["ac-settings"]["roomMode"]={1};
+  reboot();CHECK(settings.get().roomMode==1);CHECK(settings.get().remoteEverFed);
+ }
+ CASE("remote_fed_latch_survives_return_to_internal") {
+  settings.get().remoteEverFed=true;settings.save();
+  reboot();CHECK(settings.get().roomSingle==ROOM_MEMBER_INTERNAL);CHECK(settings.get().remoteEverFed);
+ }
  CASE("factory_reset_blocks_first_start") {
   settings.beginFactoryReset();
   CHECK(settings.isFactoryResetting());

@@ -242,6 +242,10 @@ extern "C" void app_main(void)
     // ── 10. CN105 UART init (skipped in safe mode) ─────────────────────
     if (!safeMode) {
         cn105.setUpdateInterval(settings.get().pollMs);
+        // Clear a remote temperature the pump kept across our restart only if
+        // this device ever fed one. Otherwise the register belongs to a wall
+        // controller (MHK, PAR) and a clear would take its room sensor away.
+        cn105.enableBootClear(settings.get().remoteEverFed);
         const uint32_t baud = settings.get().cn105Baud;
         cn105.begin(CN105_UART_NUM, PIN_CN105_RX, PIN_CN105_TX, baud);
         LOG_INFO("CN105 UART started (RX=%d TX=%d baud=%lu)",
@@ -507,6 +511,13 @@ extern "C" void app_main(void)
             // tick's readings.
             RoomAvg::loop(cn105);
             lastLinkSensorLoop = now;
+            // First remote write since boot: remember it for good, so later
+            // boots may clear a value this device left in the pump.
+            if (!settings.get().remoteEverFed && cn105.remoteWrittenSinceBoot()) {
+                settings.get().remoteEverFed = true;
+                settings.save();
+                LOG_INFO("[Room] First remote temperature fed by this device — boot-time clear enabled from the next restart");
+            }
         }
 
         // ── Status LED priority evaluation ───────────────────────────────
