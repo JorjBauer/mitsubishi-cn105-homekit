@@ -242,6 +242,18 @@ jobs:
           python3 -m json.tool "serin-cn105/${CHANNEL_DIR}/manifest.json" > /dev/null
           echo "manifest OK (${CHANNEL})"
 
+      - name: Update version index
+        env:
+          VERSION: ${{ steps.version.outputs.number }}
+          TAG: ${{ steps.version.outputs.tag }}
+        run: |
+          python3 serin-cn105/scripts/homekit_index.py add \
+            --index serin-cn105/firmware/homekit/versions.json \
+            --version "${VERSION}" --date "$(date -u +%F)" \
+            --release-url "https://github.com/akifbayram/mitsubishi-cn105-homekit/releases/tag/${TAG}" \
+            --build nanoc6=artifacts/firmware-nanoc6/firmware.bin \
+            --build m5atoms3-lite=artifacts/firmware-m5atoms3-lite/firmware.bin
+
       # Consumers read main directly, so validation must finish before the push.
       - name: Validate distribution manifests
         run: python3 serin-cn105/scripts/validate-manifests.py
