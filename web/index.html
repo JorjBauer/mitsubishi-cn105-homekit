@@ -1625,6 +1625,7 @@ a:focus-visible,button:focus-visible,input:focus-visible,select:focus-visible{ou
       setConnState('connected');
       if(reconnTimer){clearTimeout(reconnTimer);reconnTimer=null}
       reconnDelay=0;
+      fwBack(true);                               // no-op unless an install is out
       try{ws.send('{"cmd":"diag"}')}catch(e){}   // populate the device events list
       lastMsgTime=Date.now();
       if(hbTimer) clearInterval(hbTimer);
@@ -1640,6 +1641,9 @@ a:focus-visible,button:focus-visible,input:focus-visible,select:focus-visible{ou
       setConnState('reconnecting');
       ws=null;
       if(hbTimer){clearInterval(hbTimer);hbTimer=null}
+      // An install's socket dropped: its restart is under way, so the next
+      // connect, not the timer, ends the install.
+      clearTimeout(fwWait);fwWait=null;
       scheduleReconnect();
     };
 
@@ -3470,7 +3474,9 @@ a:focus-visible,button:focus-visible,input:focus-visible,select:focus-visible{ou
   var fwMenu='';              // what the open menu shows: loading, error or list
   var fwLoad=0;               // bumped per fetch, so a superseded one is dropped
   var fwBusy=false;           // an install is running: the button is locked
-  var fwBootAt=null;          // device boot count once the upload has landed
+  var fwSent=null;            // the entry the device accepted, until it is back
+  var fwWait=null;            // gives up on a restart that never dropped the socket
+  var fwRunningVer='';        // the newest word on what runs; see fwRunning()
 
   // ── ver-compare:start
   // Semver-with-prerelease ordering. Extracted and tested by
@@ -3597,9 +3603,10 @@ a:focus-visible,button:focus-visible,input:focus-visible,select:focus-visible{ou
     $('fwBetaRow').style.display='';
   }
 
-  // The page was served by RUNNING_FW_VER; after an install without a reload,
-  // deviceInfo.fw is what the device actually booted.
-  function fwRunning(){return (deviceInfo&&deviceInfo.fw)||RUNNING_FW_VER}
+  // The page was served by RUNNING_FW_VER. Later, whichever came last wins:
+  // deviceInfo.fw, or the entry just installed once the device is back (builds
+  // before v0.2.5-beta.1 send no deviceInfo, so that is all they ever give).
+  function fwRunning(){return fwRunningVer||RUNNING_FW_VER}
 
   // Button and section summary from the list in hand. Every page load starts
   // at "Versions": orange needs a load this session to have found something
@@ -3782,11 +3789,11 @@ a:focus-visible,button:focus-visible,input:focus-visible,select:focus-visible{ou
 
   // Download one index entry and flash it. Always sends the index hash so the
   // device verifies the received bytes even when the browser cannot
-  // (crypto.subtle needs https). The button stays locked through the restart:
-  // onDeviceInfo unlocks it once the device is back on a new boot.
+  // (crypto.subtle needs https). The button stays locked through the restart
+  // until fwBack.
   function runInstall(e){
     var bar=$('otaBar'),status=$('otaStatus');
-    fwBusy=true;fwBootAt=null;
+    fwBusy=true;
     renderFw();
     $('otaProgress').style.display='block';
     bar.style.width='0%';
@@ -3799,8 +3806,12 @@ a:focus-visible,button:focus-visible,input:focus-visible,select:focus-visible{ou
       return sha256Hex(buf).then(function(hash){
         if(hash&&hash!==e.sha256) throw new Error('checksum mismatch — aborted');
         flashBuffer(buf,e.sha256,function(ok){
-          if(ok) fwBootAt=deviceInfo?deviceInfo.bootCount:-1;
-          else{fwBusy=false;renderFw()}
+          if(!ok){fwBusy=false;renderFw();return}
+          fwSent=e;
+          // The device answers, waits 1 s and restarts; the heartbeat drops
+          // the silent socket ~5-7 s later. Still up after 30 s means no
+          // restart came. (Already down: the next connect is the answer.)
+          if(wsReady()) fwWait=setTimeout(function(){fwBack(false)},30000);
         });
       });
     }).catch(function(err){
@@ -3814,14 +3825,27 @@ a:focus-visible,button:focus-visible,input:focus-visible,select:focus-visible{ou
   // ── About card: device info, events, diagnostics ───────────────────────────
   var deviceInfo=null, lastEvents=null, lastState=null;
 
+  // The device is back from an install. restarted: the socket reconnected
+  // after the upload, which only a restart allows (the upload handler holds the
+  // web server until esp_restart), so the new entry is what runs — unless a
+  // deviceInfo that follows says otherwise, e.g. after a rollback. Not
+  // restarted: the socket never dropped, so the old build still runs.
+  function fwBack(restarted){
+    if(!fwSent) return;
+    if(restarted){
+      fwRunningVer=fwSent.version;
+      $('fwInstalled').textContent=fwRunningVer;
+      $('abFw').textContent=fwRunningVer;
+    }
+    fwSent=null;fwBusy=false;
+    clearTimeout(fwWait);fwWait=null;
+    $('otaProgress').style.display='none';
+    renderFw();
+  }
+
   function onDeviceInfo(d){
     deviceInfo=d;
-    // deviceInfo rides each WS connect. A new boot count after an upload
-    // landed means the device is back, on whichever image it booted.
-    if(fwBusy&&fwBootAt!==null&&d.bootCount!==fwBootAt){
-      fwBusy=false;fwBootAt=null;
-      $('otaProgress').style.display='none';
-    }
+    if(d.fw) fwRunningVer=d.fw;
     $('fwInstalled').textContent=fwRunning();
     renderFw();
     $('abBoard').textContent=d.board||'--';
