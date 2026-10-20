@@ -3493,6 +3493,69 @@ a:focus-visible,button:focus-visible,input:focus-visible,select:focus-visible{ou
   }
   // ── ver-compare:end
 
+  // ── ver-menu:start
+  // Release index (versions.json) -> the Firmware card's version menu.
+  // Extracted and tested by test/version_menu/; uses the ver-compare block.
+  //
+  // One Entry per release this board can install, newest first. An index row
+  // is skipped unless it is installable as written: a version that starts with
+  // a digit, a build for this board, and that build's path and sha256.
+  // binUrl is relative to the index, like the manifests' part paths.
+  function readVersions(idx,indexUrl,board){
+    var out=[],vs=idx&&idx.versions;
+    if(!Array.isArray(vs))return out;
+    var base=String(indexUrl).slice(0,String(indexUrl).lastIndexOf('/')+1);
+    vs.forEach(function(r){
+      if(!r||!/^\d/.test(String(r.version))||!Array.isArray(r.builds))return;
+      var b=null;
+      r.builds.forEach(function(x){if(x&&x.board===board)b=x});
+      if(!b||!b.path||!/^[0-9a-f]{64}$/i.test(String(b.sha256)))return;
+      out.push({
+        version:String(r.version),
+        date:String(r.date||''),
+        binUrl:base+b.path,
+        sha256:String(b.sha256).toLowerCase()
+      });
+    });
+    return out.sort(function(a,b){return cmpVer(b.version,a.version)});
+  }
+
+  // list is readVersions() output, so "first" means newest. Pinned rows are the
+  // newest beta (Beta updates on, and only when it beats the newest stable),
+  // the newest stable, and the installed build when neither is it; the rest
+  // are others. offer is what the Install button would write, and only when it
+  // is newer than what is running — a dev build at the same version is not
+  // offered, so an untagged tree is never nagged about the release it sits on.
+  // A dev build is never marked installed: it is not that release's binary.
+  // Tags are ordered latest, beta, installed.
+  function menuModel(list,running,betaOn){
+    var stable=null,beta=null,inst=null,dev=parseVer(running).dev;
+    list.forEach(function(e){
+      if(parseVer(e.version).pre){if(!beta)beta=e}
+      else if(!stable)stable=e;
+      if(!dev&&!inst&&cmpVer(e.version,running)===0)inst=e;
+    });
+    var showBeta=!!(betaOn&&beta&&(!stable||cmpVer(beta.version,stable.version)>0));
+    var cand=showBeta?beta:stable;
+    function row(e){
+      var t=[];
+      if(e===stable)t.push('latest');
+      if(parseVer(e.version).pre)t.push('beta');
+      if(e===inst)t.push('installed');
+      return {entry:e,tags:t,installed:e===inst};
+    }
+    var pin=[];
+    if(showBeta)pin.push(beta);
+    if(stable)pin.push(stable);
+    if(inst&&pin.indexOf(inst)<0)pin.push(inst);
+    return {
+      pinned:pin.map(row),
+      others:list.filter(function(e){return pin.indexOf(e)<0}).map(row),
+      offer:cand&&cmpVer(cand.version,running)>0?cand:null
+    };
+  }
+  // ── ver-menu:end
+
   // Show the managed-update controls only on builds with a manifest baked in.
   // The indexOf guard keeps it hidden when viewing the raw unsubstituted file.
   // (Manual .bin upload is always visible, so no else-branch is needed.)
