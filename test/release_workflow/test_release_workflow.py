@@ -17,7 +17,6 @@ PRODUCT = "homekit"
 DISTRIBUTION = Path(os.environ.get("SERIN_DISTRIBUTION_ROOT", ROOT.parent / "serin-cn105"))
 WORKFLOW = yaml.safe_load((ROOT / ".github/workflows/firmware-release.yml").read_text())
 STEPS = WORKFLOW["jobs"]["deploy"]["steps"]
-GENERATE = next(i for i, step in enumerate(STEPS) if step["name"] == "Generate manifest.json")
 INDEX = next(i for i, step in enumerate(STEPS) if step["name"] == "Update version index")
 DEPLOY = next(i for i, step in enumerate(STEPS) if step["name"] == "Deploy firmware files")
 

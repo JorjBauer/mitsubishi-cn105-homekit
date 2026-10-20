@@ -359,7 +359,7 @@ curl --data-binary @build/mitsubishi-cn105-homekit.bin \
      http://<device-ip>/upload
 ```
 
-**Version menu:** The **Firmware** card has a version menu next to the installed version. It lists every published release, newest first, with its date, and installs whichever one you pick, newer or older. Your browser fetches the release list only when you open the menu (the device itself does no GitHub I/O). This is hidden on custom and untracked builds.
+**Version menu:** The **Firmware** card has a version menu next to the installed version. The latest release and the installed one are pinned at the top (with **Beta updates** on, a newer pre-release too), then every other published release follows, newest first, each with its date. Picking one installs it, newer or older. Your browser fetches the release list only when you open the menu (the device itself does no GitHub I/O). Custom and S3 DevKitC-1 builds have no menu; the other unpublished profiles show it with "No published builds for this board."
 
 **Wrong-image rejection:** The device inspects the ESP application header as the upload streams in and refuses firmware built for a different chip or a different application before writing any of it to flash. SHA256 only proves the file arrived intact, so an image built for the wrong device passes it. One gap remains: two board profiles that share a chip and a project name (Atom S3 Lite and S3 DevKitC-1) are indistinguishable at this layer, so still pick the right board in the flasher.
 

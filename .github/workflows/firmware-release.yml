@@ -170,9 +170,10 @@ jobs:
             # Named board directories, NOT a glob. Two reasons: this is what
             # unpublishes the broken 8 MB-header esp32-devkit and esp32c3-mini
             # binaries v0.2.4 left behind (they are no longer built — see the
-            # matrix above), and a glob here would delete firmware/homekit/beta
-            # along with them, silently unpublishing the beta channel on every
-            # stable release.
+            # matrix above), and a glob here would delete firmware/homekit/beta,
+            # archive/ and versions.json along with them, silently unpublishing
+            # the beta channel and the version menu's history on every stable
+            # release.
             rm -rf firmware/homekit/nanoc6 \
                    firmware/homekit/m5atoms3-lite \
                    firmware/homekit/esp32-devkit \
