@@ -201,6 +201,9 @@ static int thermostat_write_cb(hap_write_data_t write_data[], int count,
             } else {
                 g_homekitCtrl->setPower(true);
                 g_homekitCtrl->setMode(hkTargetStateToCN105Mode(hkState));
+                // Choosing Auto in the Home app means "steer my range" even
+                // if the wall controller had the setpoint last.
+                if (hkState == 3) AutoBand::claimDevice();
             }
             hap_char_update_val(w->hc, &w->val);
             *(w->status) = HAP_STATUS_SUCCESS;
@@ -229,6 +232,7 @@ static int thermostat_write_cb(hap_write_data_t write_data[], int count,
             hap_char_update_val(w->hc, &hv);
             settings.get().heatingThreshold = heat;
             settings.get().coolingThreshold = cool;
+            AutoBand::claimDevice();
             settings.save();
             LOG_INFO("[HK:Thermo] HomeKit -> heating threshold: %.1f C (cooling: %.1f C)", heat, cool);
             *(w->status) = HAP_STATUS_SUCCESS;
@@ -250,6 +254,7 @@ static int thermostat_write_cb(hap_write_data_t write_data[], int count,
             hap_char_update_val(w->hc, &cv);
             settings.get().heatingThreshold = heat;
             settings.get().coolingThreshold = cool;
+            AutoBand::claimDevice();
             settings.save();
             LOG_INFO("[HK:Thermo] HomeKit -> cooling threshold: %.1f C (heating: %.1f C)", cool, heat);
             *(w->status) = HAP_STATUS_SUCCESS;

@@ -26,6 +26,7 @@
 #include "espnow_link.h"
 #include "link_sensor.h"
 #include "room_avg.h"
+#include "auto_band.h"
 #include "sl2_proto.h"
 
 static const char *TAG = "web_ws";
@@ -180,6 +181,9 @@ void WebUI::handleWsMessage(httpd_req_t *req, const char *msg) {
             } else {
                 LOG_INFO("Set mode=%s (0x%02X)", strVal, mode);
                 _ctrl->setMode(mode);
+                // Choosing Auto here means "steer my range" even if the
+                // wall controller had the setpoint last.
+                if (mode == CN105_MODE_AUTO) AutoBand::claimDevice();
                 hasControlChange = true;
             }
         }
@@ -246,6 +250,7 @@ void WebUI::handleWsMessage(httpd_req_t *req, const char *msg) {
                 settings.get().heatingThreshold = h;
                 settings.get().coolingThreshold = c;
             }
+            AutoBand::claimDevice();
             settings.save();
         }
 
