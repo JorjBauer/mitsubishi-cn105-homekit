@@ -901,12 +901,15 @@ void WebUI::pushState() {
     );
     section();
 
-    // Dual setpoint thresholds
+    // Dual setpoint thresholds. autoUnit: the heat pump's own controller set
+    // the Auto setpoint last, so the band engine is silent (auto_band.h).
     stateAppend(buf, bufSz, &n, &want,
         ",\"heatThresh\":%.1f"
-        ",\"coolThresh\":%.1f",
+        ",\"coolThresh\":%.1f"
+        ",\"autoUnit\":%s",
         cfg.heatingThreshold,
-        cfg.coolingThreshold
+        cfg.coolingThreshold,
+        cfg.autoOwnerUnit ? "true" : "false"
     );
     section();
 

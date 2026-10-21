@@ -611,7 +611,8 @@ a:focus-visible,button:focus-visible,input:focus-visible,select:focus-visible{ou
             <input type="range" class="slim" id="coolSlider" min="16" max="30.5" step="0.5" value="25" aria-label="Cooling threshold temperature">
           </div>
         </div>
-        <p class="range-help">Auto change-over is handled by the heat pump: it switches between heating and cooling only after the room sits about 4&deg;F (2&deg;C) past the set point for 15+ minutes, so a switch can lag.</p>
+        <p class="range-help hidden" id="autoOwnerNote">This range was set from the heat pump's own controller, so this device is not steering it. Move either slider to take over.</p>
+        <p class="range-help">Auto change-over is handled by the heat pump: it switches between heating and cooling once the room drifts about 4&deg;F (2&deg;C) past the set point, so a switch can lag. On a multi-zone system an idle head left in Auto can hold the outdoor unit's mode and block other zones &mdash; Mitsubishi advises against Auto there.</p>
       </div>
     </div>
   </div>
@@ -1723,6 +1724,11 @@ a:focus-visible,button:focus-visible,input:focus-visible,select:focus-visible{ou
     if(s.heatThresh==null||s.coolThresh==null) return;
     if(dualLocked){ autoHeadlineRange(); return; }  // user is adjusting the band
     var lbl=$('setLbl');
+    // The wall controller / IR remote set the Auto setpoint last: the firmware
+    // is not steering, so show the unit's own setpoint rather than the band's.
+    if(s.autoUnit){
+      lbl.textContent='Set at the heat pump'; targetTemp.textContent=fmtTemp(s.target); targetTemp.style.color='var(--text2)'; return;
+    }
     if(s.room!=null&&s.room<s.heatThresh){
       lbl.textContent='Heating to'; targetTemp.textContent=fmtTemp(s.heatThresh); targetTemp.style.color='var(--orange)';
     } else if(s.room!=null&&s.room>s.coolThresh){
@@ -1748,6 +1754,7 @@ a:focus-visible,button:focus-visible,input:focus-visible,select:focus-visible{ou
         coolSlider.value=(tempUnit==='F')?cToFTable(s.coolThresh):s.coolThresh;
       }
       renderBand();
+      $('autoOwnerNote').classList.toggle('hidden',!s.autoUnit);
       updateAutoHeadline(s);
     } else {
       dualTemp.classList.add('hidden');
