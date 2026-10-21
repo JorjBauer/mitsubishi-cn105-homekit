@@ -93,8 +93,7 @@ CN105State CN105Controller::getEffectiveState() const {
     // window (echavet pattern: suppress until the heat pump confirms). The
     // safety timeout prevents a stuck state if confirmation never arrives
     // (e.g. the heat pump rejects the value or the SET was lost).
-    constexpr uint32_t GRACE_SAFETY_TIMEOUT = 10000;  // 10s max
-    bool inGrace = (uptime_ms() - w.lastChange) < GRACE_SAFETY_TIMEOUT;
+    bool inGrace = (uptime_ms() - w.lastChange) < CN105_GRACE_SAFETY_MS;
     if (inGrace) {
         if (w.hasPower)    eff.power      = w.power;
         if (w.hasMode)     eff.mode       = w.mode;
@@ -696,6 +695,11 @@ void CN105Controller::processPacket(const uint8_t *pkt, uint8_t len) {
             // retain a pre-disconnect cycle timestamp or SET deferral.
             _lastCycleEnd = uptime_ms() - _updateInterval;
             if (_bootClearEnabled && _bootClear != BOOT_CLEAR_DONE) _bootClear = BOOT_CLEAR_ARMED;
+            // Whatever changed while we were away cannot be attributed; the
+            // first SETTINGS of this connection is a baseline.
+            taskENTER_CRITICAL(&_mux);
+            _settingsBaselined = false;
+            taskEXIT_CRITICAL(&_mux);
             break;
 
         case CN105_PKT_SET_ACK:
@@ -876,6 +880,24 @@ void CN105Controller::handleInfoResponse(const uint8_t *data, uint8_t dataLen) {
     }
 
     taskENTER_CRITICAL(&_mux);
+    // External Auto change detection runs before the confirmation below
+    // clears the wanted flags: those flags are what tells our own SET's
+    // echo (or the unit's clamped version of it) apart from a wall
+    // controller's write. A field is ours while it has been sent and is
+    // still inside the grace window.
+    if (settingsDecoded) {
+        if (_settingsBaselined) {
+            const bool autoNow    = next.power && next.mode == CN105_MODE_AUTO;
+            const bool autoBefore = _state.power && _state.mode == CN105_MODE_AUTO;
+            const bool tempMoved  = fabsf(next.targetTemp - _state.targetTemp) > 0.01f;
+            const bool inGrace    = (now - _wanted.lastChange) < CN105_GRACE_SAFETY_MS;
+            const bool ourTemp    = _wanted.hasTemp && _wanted.hasBeenSent && inGrace;
+            const bool ourEntry   = (_wanted.hasMode || _wanted.hasPower) && _wanted.hasBeenSent && inGrace;
+            if (autoNow && ((!autoBefore && !ourEntry) || (autoBefore && tempMoved && !ourTemp)))
+                _externalAutoChanges++;
+        }
+        _settingsBaselined = true;
+    }
     _state = next;
     _lastSuccessfulResponse = now;
     // Clear wanted flags when the heat pump confirms matching values — only

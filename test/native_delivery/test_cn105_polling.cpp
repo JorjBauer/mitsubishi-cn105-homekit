@@ -60,4 +60,48 @@ int main(int, char** argv) {
   c.sendRemoteTemperature(21);ticks(c,100,100);
   CHECK(pump.remoteSets==1);CHECK(pump.remoteClears==0);
  }
+ // External Auto changes: a wall controller or IR remote writing the Auto
+ // setpoint, or putting the unit into Auto, is a SETTINGS change this
+ // controller did not command. Pump SETTINGS: target 172 = 22.0, 166 = 19.0.
+ CASE("external_setpoint_change_counted_after_baseline") {
+  now_ms=5000;c.begin(&pump);ticks(c);CHECK(c.externalAutoChanges()==0);
+  pump.target=166;ticks(c,300,10);CHECK(c.externalAutoChanges()==1);
+  ticks(c,300,10);CHECK(c.externalAutoChanges()==1);
+ }
+ CASE("own_set_not_counted") {
+  now_ms=5000;c.begin(&pump);ticks(c);
+  c.setTargetTemp(24);c.sendPendingChanges();ticks(c,300,10);
+  CHECK(pump.target==176);CHECK(c.getState().targetTemp==24);CHECK(c.externalAutoChanges()==0);
+ }
+ CASE("own_set_answered_with_other_value_not_counted") {
+  now_ms=5000;c.begin(&pump);ticks(c);
+  c.setTargetTemp(24);c.sendPendingChanges();c.loop();CHECK(pump.sets==1);
+  pump.target=170;   // the unit clamps our 24 to 21 while our SET is in flight
+  ticks(c,300,10);CHECK(c.getState().targetTemp==21);CHECK(c.externalAutoChanges()==0);
+ }
+ CASE("change_before_our_send_goes_out_is_external") {
+  now_ms=5000;c.begin(&pump);ticks(c);
+  pump.target=166;now_ms+=CN105_UPDATE_INTERVAL;c.loop();   // SETTINGS requested, answer queued
+  c.setTargetTemp(24);c.sendPendingChanges();ticks(c,300,10); // staged, not yet sent, when it lands
+  CHECK(c.externalAutoChanges()==1);CHECK(pump.target==176);
+ }
+ CASE("external_auto_entry_counted") {
+  pump.mode=CN105_MODE_HEAT;now_ms=5000;c.begin(&pump);ticks(c);CHECK(c.externalAutoChanges()==0);
+  pump.mode=CN105_MODE_AUTO;ticks(c,300,10);CHECK(c.externalAutoChanges()==1);
+ }
+ CASE("own_auto_entry_not_counted") {
+  pump.mode=CN105_MODE_HEAT;now_ms=5000;c.begin(&pump);ticks(c);
+  c.setMode(CN105_MODE_AUTO);c.sendPendingChanges();ticks(c,300,10);
+  CHECK(c.getState().mode==CN105_MODE_AUTO);CHECK(c.externalAutoChanges()==0);
+ }
+ CASE("external_power_on_in_auto_counted") {
+  pump.power=false;now_ms=5000;c.begin(&pump);ticks(c);CHECK(c.externalAutoChanges()==0);
+  pump.power=true;ticks(c,300,10);CHECK(c.externalAutoChanges()==1);
+ }
+ CASE("first_response_after_reconnect_is_baseline") {
+  now_ms=5000;c.begin(&pump);ticks(c);
+  pump.responding=false;now_ms+=15000;ticks(c);CHECK(!c.isHealthy());
+  pump.target=166;pump.responding=true;now_ms+=4000;ticks(c,300,10);
+  CHECK(c.isHealthy());CHECK(c.getState().targetTemp==19);CHECK(c.externalAutoChanges()==0);
+ }
 }
