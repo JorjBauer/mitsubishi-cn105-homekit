@@ -84,7 +84,7 @@ public:
  int infos=0,connects=0,sets=0,remoteSets=0,remoteClears=0;
  bool responding=true;
  uint32_t readCostMs=0;
- uint8_t mode=CN105_MODE_AUTO;
+ uint8_t mode=CN105_MODE_AUTO;bool power=true;
  uint8_t target=172,roomRaw=170;
  bool legacy=false;int legacyC=22;
  int read(uint8_t* b,size_t n) override {size_t i=0;while(i<n&&!rx.empty()){b[i++]=rx.front();rx.pop_front();}if(i)now_ms+=readCostMs;return i;}
@@ -92,7 +92,7 @@ public:
  void flush() override {rx.clear();}
  void packet(uint8_t type,uint8_t subtype) {
   uint8_t p[22]={};CN105Controller::buildHeader(p,type,16);p[5]=subtype;
-  if(subtype==CN105_INFO_SETTINGS){p[8]=1;p[9]=mode;if(legacy)p[10]=31-legacyC;else p[16]=target;}
+  if(subtype==CN105_INFO_SETTINGS){p[8]=power?1:0;p[9]=mode;if(legacy)p[10]=31-legacyC;else p[16]=target;}
   if(subtype==CN105_INFO_ROOMTEMP)p[11]=roomRaw;
   if(subtype==CN105_INFO_ERRORCODE)p[9]=0x80;
   p[21]=CN105Controller::calcChecksum(p,21);
@@ -104,7 +104,7 @@ public:
   if(b[1]==CN105_PKT_SET){
    ++sets;
    if(b[5]==0x07){if(b[6])++remoteSets;else ++remoteClears;}
-   if(b[5]==1){if(b[6]&CN105_FLAG_MODE)mode=b[9];if(b[6]&CN105_FLAG_TEMP){if(b[19])target=b[19];else legacyC=31-b[10];}}
+   if(b[5]==1){if(b[6]&CN105_FLAG_POWER)power=b[8];if(b[6]&CN105_FLAG_MODE)mode=b[9];if(b[6]&CN105_FLAG_TEMP){if(b[19])target=b[19];else legacyC=31-b[10];}}
    if(responding)packet(CN105_PKT_SET_ACK,0);
   }
  }
@@ -201,7 +201,7 @@ struct DeviceSettings{
  uint8_t modeMask=MODE_CAP_ALL,vaneConfig=2,nightCeilPct=20;
  float heatingThreshold=20,coolingThreshold=25,latitude=NAN,longitude=NAN;
  int16_t nightDuskOffMin=0,nightDawnOffMin=0;
- bool useFahrenheit=false;
+ bool useFahrenheit=false,autoOwnerUnit=false;
  char deviceName[32]="Test";
 };
 struct Settings{DeviceSettings s;int saves=0;DeviceSettings& get(){return s;}void save(){++saves;}}settings;
@@ -210,11 +210,13 @@ struct Recovery{bool isAPActive(){return false;}bool wifiChangeFailed(){return f
 static uint32_t time_sync_epoch(){return 0;}
 static CN105Controller* s_ctrl;
 ''' + function(strings, "modeToCapBit") + "\n" + function(strings, "mode_mask_allows")
+# The real ownership module: the dial adapter below and the engine both call it.
+AUTO += "\n" + clean("auto_band.h") + clean("auto_band.cpp").replace('static const char *TAG', 'static const char *auto_band_TAG')
 AUTO += "\n" + adapter[adapter.index("static uint8_t mode_to_sl2"):adapter.index("/* A bonded dial reported")]
 AUTO += "\n" + function(adapter, "h_get_caps")
 AUTO += "\n" + block(thermo, thermo.index("struct AutoTarget")) + ";\n" + function(thermo, "resolveAutoTarget")
 AUTO += "\nstatic void run_auto_sync(CN105Controller& cn105){const CN105State s=cn105.getEffectiveState();\n"
-AUTO += block(thermo, thermo.index("    if (s.power && s.mode == CN105_MODE_AUTO)")) + "\n}\n" + PUMP
+AUTO += block(thermo, thermo.index("    if (s.power && s.mode == CN105_MODE_AUTO && AutoBand::deviceOwns())")) + "\n}\n" + PUMP
 
 # H2 compiles SettingsStore and HomeKit setup intact against NVS/HAP boundaries.
 # The reset stub queues work: storage completion is delivered separately.

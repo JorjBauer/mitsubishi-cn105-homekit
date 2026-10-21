@@ -1,5 +1,6 @@
 #include "homekit_services.h"
 #include "cn105_strings.h"
+#include "auto_band.h"
 #include "room_avg.h"
 #include "settings.h"
 #include "logging.h"
@@ -200,6 +201,9 @@ static int thermostat_write_cb(hap_write_data_t write_data[], int count,
             } else {
                 g_homekitCtrl->setPower(true);
                 g_homekitCtrl->setMode(hkTargetStateToCN105Mode(hkState));
+                // Choosing Auto in the Home app means "steer my range" even
+                // if the wall controller had the setpoint last.
+                if (hkState == 3) AutoBand::claimDevice();
             }
             hap_char_update_val(w->hc, &w->val);
             *(w->status) = HAP_STATUS_SUCCESS;
@@ -228,6 +232,7 @@ static int thermostat_write_cb(hap_write_data_t write_data[], int count,
             hap_char_update_val(w->hc, &hv);
             settings.get().heatingThreshold = heat;
             settings.get().coolingThreshold = cool;
+            AutoBand::claimDevice();
             settings.save();
             LOG_INFO("[HK:Thermo] HomeKit -> heating threshold: %.1f C (cooling: %.1f C)", heat, cool);
             *(w->status) = HAP_STATUS_SUCCESS;
@@ -249,6 +254,7 @@ static int thermostat_write_cb(hap_write_data_t write_data[], int count,
             hap_char_update_val(w->hc, &cv);
             settings.get().heatingThreshold = heat;
             settings.get().coolingThreshold = cool;
+            AutoBand::claimDevice();
             settings.save();
             LOG_INFO("[HK:Thermo] HomeKit -> cooling threshold: %.1f C (heating: %.1f C)", cool, heat);
             *(w->status) = HAP_STATUS_SUCCESS;
@@ -452,10 +458,13 @@ void homekit_sync_thermostat(CN105Controller &cn105)
     // Dual-setpoint AUTO: drive the unit's single setpoint from the two
     // HomeKit thresholds. The resolved target is compared against the
     // *effective* setpoint (wanted value during the grace window, heat-pump-
-    // confirmed after), so a lost SET, an IR-remote change, or a setpoint
-    // left over from another mode all self-correct on a later pass — there
-    // is deliberately no "last sent" shadow state to go stale.
-    if (s.power && s.mode == CN105_MODE_AUTO) {
+    // confirmed after), so a lost SET or a setpoint left over from another
+    // mode self-corrects on a later pass — there is deliberately no "last
+    // sent" shadow state to go stale. A setpoint written at the unit's own
+    // controller is NOT corrected: that hands the range to the unit
+    // (auto_band.h) and the engine stays silent until this device writes
+    // the band again.
+    if (s.power && s.mode == CN105_MODE_AUTO && AutoBand::deviceOwns()) {
         AutoTarget want = resolveAutoTarget(s);
         // Quantize both sides: on a legacy-encoding unit the wanted value
         // (stored raw) would otherwise never match the whole degree it reports.

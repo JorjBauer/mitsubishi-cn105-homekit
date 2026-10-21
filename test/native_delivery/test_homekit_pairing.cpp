@@ -22,6 +22,13 @@ int main(int,char**argv){
   settings.get().remoteEverFed=true;settings.save();
   reboot();CHECK(settings.get().roomSingle==ROOM_MEMBER_INTERNAL);CHECK(settings.get().remoteEverFed);
  }
+ CASE("auto_owner_defaults_to_device") {
+  CHECK(!settings.get().autoOwnerUnit);settings.save();reboot();CHECK(!settings.get().autoOwnerUnit);
+ }
+ CASE("auto_owner_unit_persists_across_reboot") {
+  settings.get().autoOwnerUnit=true;settings.save();reboot();CHECK(settings.get().autoOwnerUnit);
+  CHECK(hkNvs.committed["ac-settings"]["autoOwner"]==std::vector<uint8_t>{1});
+ }
  CASE("factory_reset_blocks_first_start") {
   settings.beginFactoryReset();
   CHECK(settings.isFactoryResetting());

@@ -26,6 +26,7 @@ idf_component_register(
          "sl2_link.c"
          "link_sensor.cpp"
          "room_avg.cpp"
+         "auto_band.cpp"
          "sl2_sodium_slim.c"
          "sl2_monocypher/monocypher.c"
          "sl2_monocypher/monocypher-ed25519.c"

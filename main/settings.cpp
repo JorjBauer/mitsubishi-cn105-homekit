@@ -460,6 +460,14 @@ void SettingsStore::begin() {
         }
     }
 
+    // autoOwner — who last set the Auto operating point. Absent (older
+    // firmware, factory reset): this device, the pre-0.2.9 behaviour.
+    {
+        uint8_t val = 0;
+        if (nvs_get_u8(_handle, "autoOwner", &val) == ESP_OK)
+            _settings.autoOwnerUnit = (val != 0);
+    }
+
     LOG_INFO("[Settings] Loaded: logLevel=%d poll=%lums baud=%lu name=%s unit=%s room mode=%u single=%u members=0x%02X",
              _settings.logLevel, (unsigned long)_settings.pollMs,
              (unsigned long)_settings.cn105Baud, _settings.deviceName,
@@ -565,6 +573,7 @@ void SettingsStore::save() {
     nvs_set_str(_handle, "setupCode", _settings.setupCode);
     nvs_set_u8(_handle, "hkPaired", _settings.homekitPaired ? 1 : 0);
     nvs_set_u8(_handle, "remoteFed", _settings.remoteEverFed ? 1 : 0);
+    nvs_set_u8(_handle, "autoOwner", _settings.autoOwnerUnit ? 1 : 0);
     nvs_set_u8(_handle, "wifiChgPend", _settings.wifiChangePending ? 1 : 0);
     nvs_set_u8(_handle, "vaneConfig", _settings.vaneConfig);
     nvs_set_u8(_handle, "modeMask", _settings.modeMask);

@@ -115,6 +115,11 @@ constexpr uint8_t  CN105_MAX_CONNECT_RETRIES = 5;
 // is considered disconnected and HomeKit reports "Not Responding".
 constexpr uint32_t CN105_COMMS_TIMEOUT     = CN105_UPDATE_INTERVAL * 6;  // 12000 ms
 
+// How long a commanded ("wanted") value masks the unit's reported one while
+// we wait for the SETTINGS confirmation, and for how long a change the unit
+// reports is still attributed to a SET of ours that it may have clamped.
+constexpr uint32_t CN105_GRACE_SAFETY_MS   = 10000;
+
 // Number of info request types polled per cycle
 constexpr uint8_t  CN105_POLL_PHASE_COUNT  = 5;   // 0x02, 0x03, 0x04, 0x06, 0x09
 
@@ -277,6 +282,20 @@ public:
         return w;
     }
 
+    /// Count of SETTINGS responses in which the unit was running in Auto with
+    /// a setpoint, or an entry into Auto, that this controller did not command
+    /// — a wall controller or IR remote at work. A change is "ours" while the
+    /// matching wanted field has been sent and is inside the grace window, so
+    /// a unit clamping our value never counts. The first response after each
+    /// connect is a baseline, never a change. Consumers compare successive
+    /// reads; the AutoBand engine yields on movement.
+    uint32_t externalAutoChanges() const {
+        taskENTER_CRITICAL(&_mux);
+        const uint32_t n = _externalAutoChanges;
+        taskEXIT_CRITICAL(&_mux);
+        return n;
+    }
+
     /// Communication-loss timeout: 6 × the runtime poll interval, floored at
     /// the compile-time default. The poll interval is user-settable up to
     /// 30 s; a fixed 12 s timeout would falsely declare the link dead there.
@@ -378,6 +397,13 @@ private:
     enum : uint8_t { BOOT_CLEAR_IDLE, BOOT_CLEAR_ARMED, BOOT_CLEAR_POLLING, BOOT_CLEAR_DONE };
     uint8_t  _bootClear = BOOT_CLEAR_IDLE;
     bool     _bootClearEnabled = false;   // enableBootClear(); set before begin()
+
+    // ── External Auto changes (see externalAutoChanges()) ──────────────────
+    // _settingsBaselined: a SETTINGS response has been seen on this
+    // connection, so the next one can be compared against _state. Reset on
+    // CONNECT_OK. Both under _mux.
+    uint32_t _externalAutoChanges = 0;
+    bool     _settingsBaselined   = false;
 
     // ── RX buffer ───────────────────────────────────────────────────────────
     uint8_t  _rxBuf[32];

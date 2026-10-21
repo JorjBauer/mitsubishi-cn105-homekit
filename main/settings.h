@@ -72,6 +72,11 @@ struct DeviceSettings {
     // Latched for good on the first send (main.cpp); gates the first-connect
     // clear of a value the pump kept across a restart (cn105 enableBootClear).
     bool     remoteEverFed = false;
+    // true = the heat pump's own controller (wall controller, IR remote) last
+    // set the Auto operating point; the dual-setpoint engine stays off until
+    // this device writes the band again (auto_band.h). Persisted so a reboot
+    // neither re-imposes a band on a wall user nor silences a HomeKit one.
+    bool     autoOwnerUnit = false;
     bool     wifiChangePending = false; // True after WiFi creds changed via web UI (shorter fallback timeout)
     uint8_t  vaneConfig = 2;          // 0=no vanes, 1=vertical only, 2=vertical+horizontal
     uint8_t  modeMask = MODE_CAP_ALL; // MODE_CAP_* bits — operating modes this unit supports (mode_caps.h)

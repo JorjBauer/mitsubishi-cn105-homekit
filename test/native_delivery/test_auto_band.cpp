@@ -64,4 +64,48 @@ int main(int, char** argv) {
   for(int t=0;t<60000;t+=10){if(t%2000==0)run_auto_sync(c);c.loop();now_ms+=10;}
   CHECK(pump.sets==sets0+1);CHECK(pump.target==(uint8_t)(20.5f*2+128));CHECK(c.getEffectiveState().targetTemp==20.5f);
  }
+ // Ownership: the engine steers only while this device last wrote the Auto
+ // operating point. Fixture: pump in Auto at 22.0 (172), room 21.0 (170),
+ // band 20–25; roomRaw 164 = 18.0 puts the room below the band.
+ CASE("engine_silent_while_unit_owns") {
+  settings.get().autoOwnerUnit=true;pump.roomRaw=164;ticks(c,300,10);int sets0=pump.sets;
+  run_auto_sync(c);ticks(c,300,10);CHECK(pump.sets==sets0);CHECK(c.getEffectiveState().targetTemp==22);
+ }
+ CASE("wall_setpoint_hands_over_and_imports_band") {
+  AutoBand::loop(c);CHECK(AutoBand::deviceOwns());
+  pump.target=166;ticks(c,300,10);AutoBand::loop(c);
+  CHECK(settings.get().autoOwnerUnit);CHECK(settings.get().heatingThreshold==18&&settings.get().coolingThreshold==20);
+  CHECK(settings.saves==1);int sets0=pump.sets;run_auto_sync(c);ticks(c,300,10);
+  CHECK(pump.sets==sets0);CHECK(c.getEffectiveState().targetTemp==19);
+ }
+ CASE("wall_entered_auto_imports_without_steering") {
+  c.setMode(CN105_MODE_HEAT);c.sendPendingChanges();ticks(c,300,10);AutoBand::loop(c);CHECK(AutoBand::deviceOwns());
+  pump.mode=CN105_MODE_AUTO;pump.roomRaw=164;ticks(c,300,10);AutoBand::loop(c);
+  CHECK(!AutoBand::deviceOwns());CHECK(settings.get().heatingThreshold==21&&settings.get().coolingThreshold==23);
+  int sets0=pump.sets;run_auto_sync(c);ticks(c,300,10);CHECK(pump.sets==sets0);
+ }
+ CASE("engine_sends_keep_device_ownership") {
+  pump.roomRaw=164;ticks(c,300,10);run_auto_sync(c);ticks(c,300,10);
+  CHECK(c.getEffectiveState().targetTemp==20);AutoBand::loop(c);CHECK(AutoBand::deviceOwns());CHECK(settings.saves==0);
+ }
+ CASE("legacy_engine_sends_keep_device_ownership") {
+  pump.legacy=true;pump.roomRaw=164;c._tempMode=false;settings.get().heatingThreshold=20.5f;
+  ticks(c,300,10);for(int t=0;t<20000;t+=10){if(t%2000==0){run_auto_sync(c);AutoBand::loop(c);}c.loop();now_ms+=10;}
+  CHECK(pump.legacyC==20);CHECK(AutoBand::deviceOwns());
+ }
+ CASE("import_clamps_at_range_edges") {
+  pump.target=189;ticks(c,300,10);AutoBand::loop(c);   // 30.5
+  CHECK(settings.get().heatingThreshold==28.5f&&settings.get().coolingThreshold==30.5f);
+  pump.target=160;ticks(c,300,10);AutoBand::loop(c);   // 16.0
+  CHECK(settings.get().heatingThreshold==16&&settings.get().coolingThreshold==18);
+ }
+ CASE("dial_band_edit_reclaims_and_steering_resumes") {
+  pump.target=166;ticks(c,300,10);AutoBand::loop(c);CHECK(!AutoBand::deviceOwns());
+  cmd.set_low_dc=230;cmd.set_high_dc=250;CHECK(h_apply(nullptr,SL2_CM_TEMP_BAND,&cmd));CHECK(AutoBand::deviceOwns());
+  run_auto_sync(c);ticks(c,300,10);CHECK(c.getEffectiveState().targetTemp==23);
+ }
+ CASE("dial_auto_selection_reclaims") {
+  settings.get().autoOwnerUnit=true;cmd.mode=SL2_MODE_HEAT_COOL;CHECK(h_apply(nullptr,SL2_CM_MODE,&cmd));
+  CHECK(AutoBand::deviceOwns());
+ }
 }

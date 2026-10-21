@@ -38,6 +38,7 @@
 #include "logging.h"
 #include "cn105_protocol.h"
 #include "cn105_strings.h"
+#include "auto_band.h"
 #include "room_avg.h"
 #include "wifi_manager.h"
 #include "wifi_recovery.h"
@@ -368,8 +369,6 @@ static uint8_t mode_from_sl2(uint8_t m) {
     }
 }
 
-static constexpr float AUTO_BAND_MIN_GAP_C = 2.0f; // controller UI threshold rule
-
 /* fan detents: step i of 5 <-> canonical percent round(i*100/5) */
 static uint8_t fan_to_pct(uint8_t cn) {
     switch (cn) {
@@ -592,10 +591,14 @@ static bool h_apply(void *, uint16_t mask, const struct sl2_cmd_pkt *cmd) {
             } else {
                 s_ctrl->setPower(true);
                 s_ctrl->setMode(cnMode);
+                // Choosing Auto here means "steer my range", even if the
+                // wall controller had the setpoint last.
+                if (cnMode == CN105_MODE_AUTO) AutoBand::claimDevice();
             }
         }
     }
     if (bandEdit) {
+        AutoBand::claimDevice();
         float heat = std::clamp(roundf(sl2_dc_to_c(cmd->set_low_dc) * 2.0f) / 2.0f,
                                 CN105_TEMP_MIN, CN105_TEMP_MAX);
         float cool = std::clamp(roundf(sl2_dc_to_c(cmd->set_high_dc) * 2.0f) / 2.0f,
