@@ -201,7 +201,7 @@ struct DeviceSettings{
  uint8_t modeMask=MODE_CAP_ALL,vaneConfig=2,nightCeilPct=20;
  float heatingThreshold=20,coolingThreshold=25,latitude=NAN,longitude=NAN;
  int16_t nightDuskOffMin=0,nightDawnOffMin=0;
- bool useFahrenheit=false;
+ bool useFahrenheit=false,autoOwnerUnit=false;
  char deviceName[32]="Test";
 };
 struct Settings{DeviceSettings s;int saves=0;DeviceSettings& get(){return s;}void save(){++saves;}}settings;
@@ -210,11 +210,13 @@ struct Recovery{bool isAPActive(){return false;}bool wifiChangeFailed(){return f
 static uint32_t time_sync_epoch(){return 0;}
 static CN105Controller* s_ctrl;
 ''' + function(strings, "modeToCapBit") + "\n" + function(strings, "mode_mask_allows")
+# The real ownership module: the dial adapter below and the engine both call it.
+AUTO += "\n" + clean("auto_band.h") + clean("auto_band.cpp").replace('static const char *TAG', 'static const char *auto_band_TAG')
 AUTO += "\n" + adapter[adapter.index("static uint8_t mode_to_sl2"):adapter.index("/* A bonded dial reported")]
 AUTO += "\n" + function(adapter, "h_get_caps")
 AUTO += "\n" + block(thermo, thermo.index("struct AutoTarget")) + ";\n" + function(thermo, "resolveAutoTarget")
 AUTO += "\nstatic void run_auto_sync(CN105Controller& cn105){const CN105State s=cn105.getEffectiveState();\n"
-AUTO += block(thermo, thermo.index("    if (s.power && s.mode == CN105_MODE_AUTO)")) + "\n}\n" + PUMP
+AUTO += block(thermo, thermo.index("    if (s.power && s.mode == CN105_MODE_AUTO && AutoBand::deviceOwns())")) + "\n}\n" + PUMP
 
 # H2 compiles SettingsStore and HomeKit setup intact against NVS/HAP boundaries.
 # The reset stub queues work: storage completion is delivered separately.
