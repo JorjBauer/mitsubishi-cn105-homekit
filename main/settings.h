@@ -49,6 +49,9 @@ struct DeviceSettings {
     uint32_t pollMs      = 2000;
     uint32_t cn105Baud   = CN105_BAUD_DEFAULT;  // 2400 or 9600 (cn105_baud.h)
     char     deviceName[32] = BRAND_NAME;
+    // One extra name the web UI answers to (web_security.h), for a device
+    // reached by a name on the user's own DNS. Empty = none.
+    char     trustedHost[64] = "";
     float    heatingThreshold = 20.0f;  // AUTO mode heating target
     float    coolingThreshold = 25.0f;  // AUTO mode cooling target
     // Night gate location (solar.h). NAN = unset: the SL2 night bits are

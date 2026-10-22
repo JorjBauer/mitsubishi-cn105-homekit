@@ -198,6 +198,13 @@ void SettingsStore::begin() {
         }
     }
 
+    // trustedHost: string; missing or unreadable reads as none
+    {
+        size_t len = sizeof(_settings.trustedHost);
+        if (nvs_get_str(_handle, "trustHost", _settings.trustedHost, &len) != ESP_OK)
+            _settings.trustedHost[0] = '\0';
+    }
+
     // heatingThreshold — float stored as blob
     {
         float val = 20.0f;
@@ -561,6 +568,7 @@ void SettingsStore::save() {
     nvs_set_u32(_handle, "pollMs", _settings.pollMs);
     nvs_set_u32(_handle, "cn105Baud", _settings.cn105Baud);
     nvs_set_str(_handle, "deviceName", _settings.deviceName);
+    nvs_set_str(_handle, "trustHost", _settings.trustedHost);
     nvs_set_blob(_handle, "heatThresh", &_settings.heatingThreshold, sizeof(float));
     nvs_set_blob(_handle, "coolThresh", &_settings.coolingThreshold, sizeof(float));
     nvs_set_blob(_handle, "nightLat", &_settings.latitude, sizeof(float));

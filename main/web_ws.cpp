@@ -371,6 +371,19 @@ void WebUI::handleWsMessage(httpd_req_t *req, const char *msg) {
             changed = true;
         }
 
+        // Rejected outright rather than trimmed: a name that isn't exactly the
+        // one in the address bar would just lock the browser out anyway.
+        char hostVal[sizeof(settings.get().trustedHost) + 1];
+        if (jsonGetString(msg, "trustedHost", hostVal, sizeof(hostVal))) {
+            if (!webTrustedHostValid(hostVal, sizeof(settings.get().trustedHost))) {
+                LOG_WARN("Config trustedHost=%.64s rejected (not a bare hostname)", hostVal);
+            } else {
+                strcpy(settings.get().trustedHost, hostVal);
+                LOG_INFO("Config trustedHost=%s", hostVal[0] ? hostVal : "(none)");
+                changed = true;
+            }
+        }
+
         char nameVal[32];
         if (jsonGetString(msg, "deviceName", nameVal, sizeof(nameVal))) {
             // Trim leading whitespace
@@ -773,10 +786,10 @@ void WebUI::pushState() {
     // (dstLen - 2): header 475 (31-char deviceName + 32-char SSID, both fully
     // escaped, plus roomMembers) + 58 outsideTemp/errorCode/runtime
     // + 183 heap/health + 44 thresholds + 108 night gate + 387 remote/dial
-    // (escaped model + fw) + 304 remoteDials (four bonded dials) + 327
+    // (escaped model + fw) + 304 remoteDials (four bonded dials) + 470
     // config + HomeKit (setup code + URI) + 195 room/Link + 215 blend +
     // roomOffs + 278 legacy BLE + 928 for four bleSensors[] entries with
-    // 48-char escaped names + 1 closing brace = 3503 B. 4096 keeps ~14% for
+    // 48-char escaped names + 1 closing brace = 3646 B. 4096 keeps ~11% for
     // fields added later; overflow past that degrades (see the sections
     // below).
     constexpr size_t bufSz = 4096;
@@ -994,6 +1007,8 @@ void WebUI::pushState() {
     // are empty. hkReady itself still drives the panel's placeholder state.
     bool hkReady = homekit_is_started();
     int hkControllers = homekit_get_controller_count();
+    char escHost[sizeof(cfg.trustedHost) * 2];
+    jsonEscape(cfg.trustedHost, escHost, sizeof(escHost));
 
     stateAppend(buf, bufSz, &n, &want,
         ",\"logLevel\":%d"
@@ -1004,6 +1019,7 @@ void WebUI::pushState() {
         ",\"vaneConfig\":%d"
         ",\"modeMask\":%d"
         ",\"modeMaskBoot\":%d"
+        ",\"trustedHost\":\"%s\""
         ",\"hkReady\":%s"
         ",\"hkPaired\":%s"
         ",\"hkControllers\":%d"
@@ -1018,6 +1034,7 @@ void WebUI::pushState() {
         (int)cfg.vaneConfig,
         (int)cfg.modeMask,
         (int)(hkReady ? homekit_get_boot_mode_mask() : cfg.modeMask),
+        escHost,
         hkReady ? "true" : "false",
         (cfg.homekitPaired || hkControllers > 0) ? "true" : "false",
         hkControllers,
