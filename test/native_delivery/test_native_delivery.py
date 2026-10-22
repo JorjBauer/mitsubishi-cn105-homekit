@@ -104,7 +104,7 @@ public:
   if(b[1]==CN105_PKT_SET){
    ++sets;
    if(b[5]==1&&(b[6]&CN105_FLAG_TEMP)&&dropTemp>0){--dropTemp;return;}   // lost: not applied, not ACKed
-   if(b[5]==0x07){if(b[6])++remoteSets;else ++remoteClears;}
+   if(b[5]==0x07){if(b[6]){++remoteSets;roomRaw=b[8];}else ++remoteClears;}
    if(b[5]==1){if(b[6]&CN105_FLAG_POWER)power=b[8];if(b[6]&CN105_FLAG_MODE)mode=b[9];if(b[6]&CN105_FLAG_TEMP){if(b[19])target=b[19];else legacyC=31-b[10];}}
    if(responding)packet(CN105_PKT_SET_ACK,0);
   }

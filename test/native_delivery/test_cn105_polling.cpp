@@ -12,15 +12,17 @@ int main(int, char** argv) {
   CHECK(pump.infos==5);ticks(c,20,10);CHECK(pump.infos==5);
  }
  CASE("set_deferral_across_rollover") {
-  now_ms=UINT32_MAX-1000;c.begin(&pump);ticks(c);
+  now_ms=UINT32_MAX-3000;c.begin(&pump);ticks(c);
+  now_ms=UINT32_MAX-500;  // Poll due; SET wins, then requires a quiet period.
   c.setTargetTemp(24);c.sendPendingChanges();c.loop();int before=pump.infos;
-  now_ms+=CN105_DEFER_DELAY+CN105_UPDATE_INTERVAL-1;c.loop();CHECK(pump.infos==before);
+  now_ms+=CN105_DEFER_DELAY-1;c.loop();CHECK(pump.infos==before);
   ++now_ms;c.loop();CHECK(pump.infos==before+1);ticks(c);CHECK(pump.infos==before+5);
  }
  CASE("remote_deferral_across_rollover") {
-  now_ms=UINT32_MAX-1000;c.begin(&pump);ticks(c);
+  now_ms=UINT32_MAX-3000;c.begin(&pump);ticks(c);
+  now_ms=UINT32_MAX-500;
   c.sendRemoteTemperature(19);c.loop();int before=pump.infos;
-  now_ms+=CN105_DEFER_DELAY+CN105_UPDATE_INTERVAL-1;c.loop();CHECK(pump.infos==before);
+  now_ms+=CN105_DEFER_DELAY-1;c.loop();CHECK(pump.infos==before);
   ++now_ms;c.loop();CHECK(pump.infos==before+1);
  }
  CASE("reconnect_polls_immediately") {
@@ -47,7 +49,8 @@ int main(int, char** argv) {
   CHECK(pump.infos==5);            // the first poll still runs straight after the handshake
   CHECK(pump.remoteClears==1);CHECK(pump.remoteSets==0);
   ticks(c,100,100);CHECK(pump.remoteClears==1);
-  pump.responding=false;now_ms+=15000;ticks(c);CHECK(!c.isHealthy());
+  // Drain the reply already queued before simulating a 15 s silent link.
+  pump.responding=false;ticks(c);now_ms+=15000;ticks(c);CHECK(!c.isHealthy());
   pump.responding=true;now_ms+=4000;ticks(c,100,100);
   CHECK(c.isHealthy());CHECK(pump.remoteClears==1);   // first connect after boot only
  }
@@ -144,5 +147,23 @@ int main(int, char** argv) {
   c.setTargetTemp(18);c.sendPendingChanges();ticks(c,5,10);pump.target=166;   // unit holds 19.0
   pump.responding=false;now_ms+=15000;ticks(c);CHECK(!c.isHealthy());pump.responding=true;now_ms+=4000;ticks(c,300,10);
   CHECK(c.isHealthy());CHECK(!c._wanted.hasTemp);CHECK(!c.refusedSetpoint(18));
+ }
+ CASE("external_keepalive_does_not_starve_long_interval_polls") {
+  now_ms=5000;c.setUpdateInterval(30000);c.begin(&pump);ticks(c);
+  int before=pump.infos;CHECK(c.getState().roomTemp==21);
+  for(int i=0;i<1200;i++){
+   if(i%200==0)c.sendRemoteTemperature(27);
+   c.loop();now_ms+=100;
+  }
+  CHECK(pump.infos>=before+15);CHECK(c.getState().roomTemp==27);CHECK(c.isHealthy());
+ }
+ CASE("frequent_set_commands_do_not_starve_long_interval_polls") {
+  now_ms=5000;c.setUpdateInterval(30000);c.begin(&pump);ticks(c);
+  int before=pump.infos;
+  for(int i=0;i<1200;i++){
+   if(i%200==0){c.setTargetTemp(24);c.sendPendingChanges();}
+   c.loop();now_ms+=100;
+  }
+  CHECK(pump.infos>=before+15);CHECK(c.getState().targetTemp==24);CHECK(c.isHealthy());
  }
 }

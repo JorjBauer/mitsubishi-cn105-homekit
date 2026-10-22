@@ -159,8 +159,8 @@ void CN105Controller::loop() {
         taskEXIT_CRITICAL(&_mux);
         LOG_INFO("Sending pending set command (flags=0x%02X flags2=0x%02X)", cmd.flags1, cmd.flags2);
         sendSetPacket(cmd);
-        _lastCycleEnd = now;
-        _pollDelayMs = CN105_DEFER_DELAY;
+        _lastWriteMs = uptime_ms();
+        _writeDeferred = true;
         return;
     }
 
@@ -188,8 +188,8 @@ void CN105Controller::loop() {
         _pendingRemoteTemp = false;
         taskEXIT_CRITICAL(&_mux);
         sendRemoteTempPacket(remoteTempC);
-        _lastCycleEnd = now;
-        _pollDelayMs = CN105_DEFER_DELAY;
+        _lastWriteMs = uptime_ms();
+        _writeDeferred = true;
         return;
     }
 
@@ -240,10 +240,13 @@ void CN105Controller::loop() {
             }
         }
     } else {
-        // Keep the timestamp in the past: unsigned elapsed time remains
-        // valid across uptime rollover, including the post-SET delay.
-        if ((uint32_t)(now - _lastCycleEnd) >= _updateInterval + _pollDelayMs) {
-            _pollDelayMs = 0;
+        // Writes require a quiet period, but must not restart the poll clock:
+        // a 20s sensor keepalive would otherwise starve a 30s poll forever.
+        // Both elapsed-time checks remain valid across uptime rollover.
+        if (_writeDeferred && (uint32_t)(now - _lastWriteMs) >= CN105_DEFER_DELAY) {
+            _writeDeferred = false;
+        }
+        if (!_writeDeferred && (uint32_t)(now - _lastCycleEnd) >= _updateInterval) {
             LOG_DEBUG("Starting new poll cycle");
             if (_bootClear == BOOT_CLEAR_ARMED) _bootClear = BOOT_CLEAR_POLLING;
             _cycleRunning = true;
@@ -697,7 +700,7 @@ void CN105Controller::processPacket(const uint8_t *pkt, uint8_t len) {
             _connectRetries = 0;
             _cycleRunning = false;
             _awaitingResponse = false;
-            _pollDelayMs = 0;
+            _writeDeferred = false;
             // A new handshake always starts a fresh poll immediately. Do not
             // retain a pre-disconnect cycle timestamp or SET deferral.
             _lastCycleEnd = uptime_ms() - _updateInterval;
