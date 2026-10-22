@@ -865,8 +865,8 @@ static int room_catalog_build(struct sl2_room_source_entry *a, int cap) {
 #endif
     int links = sl2_link_dial_count(&s_link);
     for (int i = 0; i < links; i++) {
-        uint8_t mac[6];
-        if (!sl2_link_dial_mac(&s_link, i, mac)) continue;
+        sl2_dial_view_t dial;
+        if (!sl2_link_dial_view(&s_link, i, &dial)) continue;
         char name[SL2_ROOM_SOURCE_NAME_LEN];
         copy_name(name, sizeof name, "Serin Link");
         if (links > 1 && i < 9) {   /* SL2_MAX_DIALS is single-digit */
@@ -875,7 +875,8 @@ static int room_catalog_build(struct sl2_room_source_entry *a, int cap) {
             name[l + 1] = (char)('1' + i);
             name[l + 2] = '\0';
         }
-        add(sl2_room_source_mac_id(SL2_ROOM_SOURCE_NS_LINK, mac), SL2_ROOM_KIND_LINK, name);
+        add(sl2_room_source_mac_id(SL2_ROOM_SOURCE_NS_LINK, dial.mac), SL2_ROOM_KIND_LINK, name,
+            dial.has_sensor ? SL2_ROOM_SOURCE_F_SELECTABLE : 0);
     }
     return n;
 }
@@ -944,20 +945,23 @@ static uint8_t h_room_source_set(void *, uint32_t rev, uint64_t id) {
         }
 #endif
     uint8_t pin[6];
+    bool linkHasSensor = false;
     if (single < 0 && sl2_room_source_id_mac(id, SL2_ROOM_SOURCE_NS_LINK, pin)) {
         int dials = sl2_link_dial_count(&s_link);
         for (int i = 0; i < dials; i++) {
-            uint8_t mac[6];
-            if (sl2_link_dial_mac(&s_link, i, mac) && memcmp(mac, pin, 6) == 0) {
+            sl2_dial_view_t dial;
+            if (sl2_link_dial_view(&s_link, i, &dial) && memcmp(dial.mac, pin, 6) == 0) {
                 single = ROOM_MEMBER_LINK;
+                linkHasSensor = dial.has_sensor;
                 break;
             }
         }
     }
     if (single < 0) return SL2_ROOM_SET_BAD_SOURCE;
-    /* The same gate every other writer applies (room_avg.h): a source that
-     * went away between the catalog page and this SET is not selectable. */
-    if (!RoomAvg::memberAvailable(single)) return SL2_ROOM_SET_BAD_SOURCE;
+    /* A Link id names one dial: capability belongs to that bond, not the
+     * currently selected reading. Keep known capable offline dials selectable. */
+    if (single == ROOM_MEMBER_LINK ? !linkHasSensor : !RoomAvg::memberAvailable(single))
+        return SL2_ROOM_SET_BAD_SOURCE;
 
     st.roomMode     = 0;
     st.roomSingle   = (uint8_t)single;

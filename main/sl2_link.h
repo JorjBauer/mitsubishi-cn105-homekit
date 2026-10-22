@@ -161,6 +161,7 @@ typedef struct {
                                * until bond.flags records the durable latch */
     bool     screen_valid;    /* dial's last DIAL_SENSOR carried screen status */
     bool     screen_on;       /* ...and the panel was lit (dim/glance count) */
+    bool     has_sensor;      /* this dial reported SL2_DSF_HAS_SENSOR */
 } sl2_dial_rt_t;
 
 typedef enum { SL2_PAIR_OFF = 0, SL2_PAIR_WINDOW, SL2_PAIR_CONFIRM } sl2_pair_state_t;
@@ -271,6 +272,7 @@ typedef struct {
     uint8_t  cert_state;      /* sl2_cert_state_t */
     bool     screen_valid;    /* dial reports screen status (SL2_DSF_SCREEN_VALID) */
     bool     screen_on;       /* panel lit; meaningful iff screen_valid */
+    bool     has_sensor;      /* hardware capability, independent of selection/liveness */
 } sl2_dial_view_t;
 
 bool sl2_link_dial_view(sl2_link_t *l, int idx, sl2_dial_view_t *out);

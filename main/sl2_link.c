@@ -585,6 +585,9 @@ void sl2_link_on_recv(sl2_link_t *l, const uint8_t src[6], const uint8_t dst[6],
              * a dial that stops reporting reads unknown, never stale-off. */
             d->screen_valid = (p.flags & SL2_DSF_SCREEN_VALID) != 0;
             d->screen_on    = (p.flags & SL2_DSF_SCREEN_ON) != 0;
+            /* Keep capability per bond before the adapter filters readings
+             * by the selected MAC. An offline pin must not hide other dials. */
+            d->has_sensor = (p.flags & SL2_DSF_HAS_SENSOR) != 0;
             if (l->hvac->room_sensor) {
                 /* want_src is only present on a long-enough frame. The
                  * tolerant decode zero-fills it otherwise, and 0 is Internal
@@ -985,6 +988,7 @@ bool sl2_link_dial_view(sl2_link_t *l, int idx, sl2_dial_view_t *out) {
     out->cert_state = d->cert_state;
     out->screen_valid = d->screen_valid;
     out->screen_on = d->screen_on;
+    out->has_sensor = d->has_sensor;
     return true;
 }
 

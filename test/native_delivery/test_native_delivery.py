@@ -121,6 +121,7 @@ LINK = HOST + r'''
 #include "room_feed.h"
 #include "link_units.h"
 #include "sl2_bond.h"
+#include "sl2_link.h"
 constexpr int ROOM_MAX_BLE_SENSORS=4,ROOM_MEMBER_INTERNAL=0,ROOM_MEMBER_LINK=1,ROOM_MEMBER_BLE0=2,
  ROOM_MEMBER_COUNT=ROOM_MEMBER_BLE0+ROOM_MAX_BLE_SENSORS;
 struct DeviceSettings{uint64_t roomSourceId=0;int roomMode=0,roomSingle=1,roomStaleTimeoutS=600;uint8_t roomMembers=0;};
@@ -173,10 +174,15 @@ LINK += r'''
 #define portEXIT_CRITICAL(mux) ((void)(mux))
 struct BondedDials {int n=2;uint8_t mac[SL2_MAX_DIALS][6]={{1,2,3,4,5,6},{6,5,4,3,2,1}};};
 static BondedDials s_link;
+static bool s_dialHasSensor[SL2_MAX_DIALS]={true,true};
 static int sl2_link_dial_count(const BondedDials* l) {return l->n;}
 static bool sl2_link_dial_mac(const BondedDials* l,int index,uint8_t out[6]) {
  if(index<0||index>=l->n)return false;
  memcpy(out,l->mac[index],6);return true;
+}
+static bool sl2_link_dial_view(const BondedDials* link,int index,sl2_dial_view_t* out) {
+ if(!out||index<0||index>=link->n)return false;
+ *out={};sl2_link_dial_mac(link,index,out->mac);out->has_sensor=s_dialHasSensor[index];return true;
 }
 static bool sl2_link_forget_dial(BondedDials* l,const uint8_t mac[6]) {
  for(int i=0;i<l->n;i++)if(!memcmp(l->mac[i],mac,6)){

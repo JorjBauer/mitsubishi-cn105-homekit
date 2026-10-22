@@ -295,6 +295,12 @@ static int gap_event_cb(struct ble_gap_event *event, void *arg) {
             bool gotTemp = !std::isnan(reading.temp);
             taskENTER_CRITICAL(&s_mux);
             SlotState &sl = s_slots[slot];
+            // setSensor() can replace or clear the target while decoding.
+            // Never attach an in-flight advertisement to the new identity.
+            if (!sl.valid || memcmp(sl.mac, addrStr, 17) != 0) {
+                taskEXIT_CRITICAL(&s_mux);
+                return 0;
+            }
             if (gotTemp) {
                 sl.temp = reading.temp;
                 // Freshness follows the temperature: battery-only frames from
