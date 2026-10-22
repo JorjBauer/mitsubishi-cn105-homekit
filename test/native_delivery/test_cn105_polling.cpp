@@ -120,4 +120,29 @@ int main(int, char** argv) {
   c.setFanSpeed(CN105_FAN_2);c.sendPendingChanges();ticks(c,300,10);
   CHECK(pump.mode==CN105_MODE_AUTO);CHECK(pump.sets==2);CHECK(c.externalAutoChanges()==0);
  }
+ // The unit reporting our own setpoint confirms it even with another field
+ // staged — so a matching answer can never later read as a refusal.
+ CASE("own_set_confirmed_with_fan_staged_mid_poll") {
+  now_ms=5000;c.begin(&pump);ticks(c);
+  c.setTargetTemp(24);c.sendPendingChanges();c.loop();
+  int infos=pump.infos;while(pump.infos==infos){now_ms+=10;c.loop();}
+  c.setFanSpeed(CN105_FAN_2);c.loop();   // reads the SETTINGS answer; the fan is still staged
+  CHECK(c.getState().targetTemp==24);CHECK(!c._wanted.hasTemp);CHECK(!c.refusedSetpoint(24));
+ }
+ CASE("unconfirmed_setpoint_not_resurrected_by_later_command") {
+  // Heat mode, the unit holds 28.0 when asked for 30.0. Once the grace window
+  // has passed, a later fan command must not bring the refused 30.0 back.
+  pump.mode=CN105_MODE_HEAT;now_ms=5000;c.begin(&pump);ticks(c);
+  c.setTargetTemp(30);c.sendPendingChanges();
+  for(int i=0;i<1500;i++){c.loop();if(pump.target>184)pump.target=184;now_ms+=10;}
+  CHECK(c.getEffectiveState().targetTemp==28);
+  c.setFanSpeed(CN105_FAN_2);c.sendPendingChanges();
+  for(int i=0;i<1000;i++){c.loop();CHECK(c.getEffectiveState().targetTemp==28);now_ms+=10;}
+ }
+ CASE("first_answer_after_reconnect_never_latches") {
+  now_ms=5000;c.begin(&pump);ticks(c);
+  c.setTargetTemp(18);c.sendPendingChanges();ticks(c,5,10);pump.target=166;   // unit holds 19.0
+  pump.responding=false;now_ms+=15000;ticks(c);CHECK(!c.isHealthy());pump.responding=true;now_ms+=4000;ticks(c,300,10);
+  CHECK(c.isHealthy());CHECK(!c._wanted.hasTemp);CHECK(!c.refusedSetpoint(18));
+ }
 }

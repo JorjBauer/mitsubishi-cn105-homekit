@@ -155,6 +155,7 @@ void CN105Controller::loop() {
         _sendRequested = false;
         _wanted.hasBeenSent = true;
         _wanted.sentFlags |= cmd.flags1;
+        if (cmd.flags1 & CN105_FLAG_TEMP) _wanted.tempAtSend = _state.targetTemp;
         taskEXIT_CRITICAL(&_mux);
         LOG_INFO("Sending pending set command (flags=0x%02X flags2=0x%02X)", cmd.flags1, cmd.flags2);
         sendSetPacket(cmd);
@@ -705,6 +706,9 @@ void CN105Controller::processPacket(const uint8_t *pkt, uint8_t len) {
             // first SETTINGS of this connection is a baseline.
             taskENTER_CRITICAL(&_mux);
             _settingsBaselined = false;
+            // A refusal was the answer of the unit as it was then; after a
+            // reconnect it may answer differently.
+            _refusedTemp = _refusedAnswer = _unconfirmedTemp = NAN;
             taskEXIT_CRITICAL(&_mux);
             break;
 
@@ -891,6 +895,7 @@ void CN105Controller::handleInfoResponse(const uint8_t *data, uint8_t dataLen) {
     // echo (or the unit's clamped version of it) apart from a wall
     // controller's write. A field is ours while its latest value has been
     // sent (per field: sentFlags) and is still inside the grace window.
+    const bool wasBaselined = _settingsBaselined;
     if (settingsDecoded) {
         if (_settingsBaselined) {
             const bool autoNow    = next.power && next.mode == CN105_MODE_AUTO;
@@ -918,14 +923,42 @@ void CN105Controller::handleInfoResponse(const uint8_t *data, uint8_t dataLen) {
             _wanted.hasPower = false;
         if (_wanted.hasMode && next.mode == _wanted.mode)
             _wanted.hasMode = false;
-        if (_wanted.hasTemp && fabsf(next.targetTemp - quantizeSetpoint(_wanted.targetTemp)) < 0.3f)
-            _wanted.hasTemp = false;
         if (_wanted.hasFan && next.fanSpeed == _wanted.fanSpeed)
             _wanted.hasFan = false;
         if (_wanted.hasVane && next.vane == _wanted.vane)
             _wanted.hasVane = false;
         if (_wanted.hasWideVane && next.wideVane == _wanted.wideVane)
             _wanted.hasWideVane = false;
+    }
+    // The setpoint confirms on its own sent flag, so a command for another
+    // field staged meanwhile cannot hold a matching answer open (and the
+    // refusal check below can never see our own value as a refusal).
+    if (settingsDecoded && _wanted.hasTemp && (_wanted.sentFlags & CN105_FLAG_TEMP) &&
+        fabsf(next.targetTemp - quantizeSetpoint(_wanted.targetTemp)) < 0.3f) {
+        _wanted.hasTemp = false;
+        _unconfirmedTemp = NAN;
+    }
+    // Grace over and the unit still reports another setpoint: that is its
+    // answer. A unit that moved took the SET and settled elsewhere — it will
+    // not hold our value, so latch the refusal (refusedSetpoint). One that
+    // stayed put may have lost the SET, so the value gets one retry before
+    // it is latched. Either way the declined value stops masking the real
+    // one. The first answer of a connection has nothing to compare against.
+    if (settingsDecoded && _wanted.hasTemp && (_wanted.sentFlags & CN105_FLAG_TEMP) &&
+        (now - _wanted.lastChange) >= CN105_GRACE_SAFETY_MS) {
+        const float q = quantizeSetpoint(_wanted.targetTemp);
+        const bool moved = fabsf(next.targetTemp - _wanted.tempAtSend) > 0.01f;
+        if (wasBaselined) {
+            if (moved || q == _unconfirmedTemp) {
+                _refusedTemp = q;
+                _refusedAnswer = next.targetTemp;
+                _refusedMode = next.mode;
+                _unconfirmedTemp = NAN;
+            } else {
+                _unconfirmedTemp = q;
+            }
+        }
+        _wanted.hasTemp = false;
     }
     taskEXIT_CRITICAL(&_mux);
 }
