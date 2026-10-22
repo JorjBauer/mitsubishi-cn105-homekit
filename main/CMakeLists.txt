@@ -31,7 +31,7 @@ idf_component_register(
          "sl2_monocypher/monocypher.c"
          "sl2_monocypher/monocypher-ed25519.c"
     INCLUDE_DIRS "."
-    REQUIRES nvs_flash esp_wifi esp_netif esp_http_server esp_timer driver bt app_update mbedtls
+    REQUIRES nvs_flash esp_wifi esp_netif esp_http_server esp_timer driver bt app_update mbedtls json
              esp_hap_core esp_hap_apple_profiles esp_hap_platform espressif__mdns
              console espressif__libsodium
 )

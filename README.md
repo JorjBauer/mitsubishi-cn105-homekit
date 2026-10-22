@@ -127,8 +127,11 @@ idf.py -p /dev/ttyACM0 monitor
 For any board other than the NanoC6, add its [profile flag](#boards) to the build command. `sdkconfig` is generated and gitignored. `set-target` rewrites it, so switching targets in an existing checkout is safe, but copying someone else's `sdkconfig` is not.
 
 Host-side tests need no hardware and no ESP-IDF. Use Python 3.12 or newer,
-a C/C++ compiler, and a sibling checkout of the distribution repository with
-its release validator:
+a C/C++ compiler, Node.js, cJSON development headers and `pkg-config`, and a
+sibling checkout of the distribution repository with its release validator.
+On Debian/Ubuntu, install the cJSON dependency with
+`sudo apt-get install libcjson-dev pkg-config`. The credential tests can also
+use the cJSON source in `IDF_PATH` or `~/esp/esp-idf` when ESP-IDF is installed:
 
 ```bash
 git clone https://github.com/Serin-Labs/serin-cn105.git ../serin-cn105

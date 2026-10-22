@@ -34,6 +34,8 @@ jobs:
 
       - name: Install release test dependencies
         run: |
+          sudo apt-get update
+          sudo apt-get install -y libcjson-dev pkg-config
           python3 -m pip install -r validation-tools/scripts/requirements-validation.txt \
             -r test/release_workflow/requirements.txt
 

@@ -9,6 +9,8 @@ truncated password.
 """
 from pathlib import Path
 import json
+import os
+import shlex
 import re
 import subprocess
 import tempfile
@@ -22,6 +24,8 @@ assert m, "cannot find WebUI::applyWifiCredentials"
 PREFIX = r'''
 #include "json_utils.h"
 #include "web_security.h"
+#include "cJSON.h"
+#include <memory>
 #include <cassert>
 #include <string>
 #include <cstdio>
@@ -30,8 +34,8 @@ PREFIX = r'''
 static void eventlog_append(int) {}
 static std::string got_ssid, got_pass;
 static int connects;
-struct WifiManager { static void connect(const char *s, const char *p)
-    { got_ssid = s; got_pass = p; ++connects; } };
+struct WifiManager { static bool connect(const char *s, const char *p)
+    { got_ssid = s; got_pass = p; ++connects; return true; } };
 static struct { void setChangePending(bool) {} void noteReprovision() {} } wifiRecovery;
 struct WebUI { bool applyWifiCredentials(const char *json, const char **outError); };
 '''
@@ -78,8 +82,19 @@ here = Path(__file__).resolve().parent
 with tempfile.TemporaryDirectory(prefix="build.", dir=here) as tmp:
     unit = Path(tmp) / "t.cpp"
     unit.write_text(PREFIX + "\n" + m[0] + "\n" + body)
+    sdk = Path(os.environ.get("IDF_PATH", Path.home() / "esp/esp-idf")) / "components/json/cJSON"
+    if (sdk / "cJSON.c").is_file():
+        obj = Path(tmp) / "cJSON.o"
+        subprocess.run(["cc", "-c", str(sdk / "cJSON.c"), "-o", str(obj)], check=True)
+        dependency = ["-I" + str(sdk), str(obj)]
+    else:
+        result = subprocess.run(["pkg-config", "--cflags", "--libs", "libcjson"],
+                                capture_output=True, text=True)
+        if result.returncode:
+            raise SystemExit("Install libcjson-dev and pkg-config, or set IDF_PATH to ESP-IDF")
+        dependency = shlex.split(result.stdout)
     exe = Path(tmp) / "t"
     subprocess.run(["g++", "-std=c++17", "-Wall", "-Wextra", "-Werror",
                     "-fsanitize=address,undefined", "-g",
-                    "-I" + str(ROOT / "main"), str(unit), "-o", str(exe)], check=True)
+                    "-I" + str(ROOT / "main"), str(unit), *dependency, "-o", str(exe)], check=True)
     subprocess.run([str(exe)], check=True)
