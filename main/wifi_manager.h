@@ -12,7 +12,8 @@ namespace WifiManager {
     /// Connect to WiFi with given credentials, stores in NVS "wifi-creds".
     /// Non-blocking: starts connection, returns true if initiated successfully.
     /// SSID: 1–32 bytes; password: up to 64 bytes (nullptr means open network).
-    /// Oversized input returns false without changing the current connection.
+    /// Oversized input or a rejected driver configuration returns false without
+    /// replacing the current trial. Callers must check the result.
     bool connect(const char* ssid, const char* password);
 
     /// Connection state (set by event handler, non-blocking).
@@ -68,8 +69,9 @@ namespace WifiManager {
     /// Returns true if credentials were found and loaded.
     bool loadCredentials(char* ssid, size_t ssidLen, char* password, size_t passLen);
 
-    /// Save WiFi credentials to NVS namespace "wifi-creds".
-    void saveCredentials(const char* ssid, const char* password);
+    /// Save WiFi credentials to NVS namespace "wifi-creds". Returns true only
+    /// after both writes and commit succeed. Provisioners use connect()/loop().
+    bool saveCredentials(const char* ssid, const char* password);
 
     /// Erase WiFi credentials from NVS namespace "wifi-creds".
     void eraseCredentials();

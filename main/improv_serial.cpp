@@ -191,6 +191,13 @@ static void handle_scan_wifi() {
     send_scan_end();
 }
 
+static bool wifi_settings_committed() {
+    const auto trial = WifiManager::getTrialState();
+    return WifiManager::isConnected() && !WifiManager::isJoinPending() &&
+           (trial == WifiManager::WIFI_TRIAL_SUCCESS ||
+            trial == WifiManager::WIFI_TRIAL_IDLE);
+}
+
 static void handle_wifi_settings(const uint8_t* data, uint8_t len) {
     if (len < 2) { send_error(ERR_INVALID_RPC); return; }
 
@@ -208,18 +215,26 @@ static void handle_wifi_settings(const uint8_t* data, uint8_t len) {
         memcpy(pass, data + pass_start + 1, pass_copy);
 
     LOG_INFO("[Improv] WiFi settings: SSID='%s'", ssid);
-    WifiManager::connect(ssid, pass);
+    if (!WifiManager::connect(ssid, pass)) {
+        send_error(ERR_UNABLE_TO_CONNECT);
+        s_cur_state = STATE_AUTHORIZED;
+        send_current_state(STATE_AUTHORIZED);
+        return;
+    }
+    wifiRecovery.setChangePending(true);
+    wifiRecovery.noteReprovision();
 
     s_cur_state = STATE_PROVISIONING;
     send_current_state(STATE_PROVISIONING);
 
     for (int i = 0; i < 150; i++) {         // 15 s @ 100 ms ticks
         vTaskDelay(pdMS_TO_TICKS(100));
-        if (WifiManager::isConnected()) break;
+        if (wifi_settings_committed()) break;
+        if (WifiManager::getTrialState() == WifiManager::WIFI_TRIAL_FAILED) break;
         // stop() is blocking on our exit with a bounded timeout; drop the wait
         // as soon as it asks, or it gives up and the console stays ours.
-        // Connected wins the tie above, so a join on the same tick as a stop
-        // still saves its credentials.
+        // A completed commit wins the tie above. GOT_IP alone is not enough:
+        // the main task owns persistence and can still be retrying NVS writes.
         if (s_stop_requested) {
             // An abandoned join is still a failed join as far as the browser is
             // concerned: it waits on a result or an error and nothing else will
@@ -232,9 +247,7 @@ static void handle_wifi_settings(const uint8_t* data, uint8_t len) {
         }
     }
 
-    if (WifiManager::isConnected()) {
-        WifiManager::saveCredentials(ssid, pass);
-        wifiRecovery.setChangePending(true);
+    if (wifi_settings_committed()) {
         s_cur_state = STATE_PROVISIONED;
         send_current_state(STATE_PROVISIONED);
 

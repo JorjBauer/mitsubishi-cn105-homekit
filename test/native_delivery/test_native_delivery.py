@@ -241,7 +241,7 @@ static constexpr const char* KEY_RING="ring";
 static EventBlob s_blob{};
 ''' + function((MAIN / "event_log.cpp").read_text(), "persistLocked") + "\n}\n"
 wifi = (MAIN / "wifi_manager.cpp").read_text()
-FACTORY += "\nnamespace WifiManager {void saveCredentials(const char*,const char*);void eraseCredentials();}\n"
+FACTORY += "\nnamespace WifiManager {bool saveCredentials(const char*,const char*);void eraseCredentials();}\n"
 FACTORY += wifi[wifi.index("static constexpr const char* NVS_NAMESPACE"):wifi.index("// ── Event group bits")]
 FACTORY += "\nstatic int8_t s_haveCreds=-1;\n" + "\n".join(function(wifi, n) for n in
     ["WifiManager::saveCredentials", "WifiManager::eraseCredentials"])
