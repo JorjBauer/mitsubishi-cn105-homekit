@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cmath>
 #include <cstdint>
 #include <cstddef>
 #include <cstring>
@@ -168,6 +169,12 @@ struct WantedSettings {
     bool hasWideVane = false;
 
     bool hasBeenSent = false;   // Set packet was transmitted to heat pump
+    // CN105_FLAG_* of the fields whose latest wanted value has been
+    // transmitted. hasBeenSent is shared by every field — a fan command
+    // staged after our setpoint went out clears it — so change attribution
+    // (externalAutoChanges) asks per field instead.
+    uint8_t  sentFlags = 0;
+    float    tempAtSend = 0;    // setpoint the unit reported when the latest temp SET went out
     uint32_t lastChange = 0;    // uptime_ms() of most recent user command
 };
 
@@ -296,6 +303,24 @@ public:
         return n;
     }
 
+    /// True when sending this setpoint again would change nothing: a SET of
+    /// the same value is out and still awaiting the unit's answer, or the
+    /// unit answered it with another value (it will not hold it — e.g. an
+    /// Auto floor its wall controller enforces) and still reports that value
+    /// in the same mode. A unit that did not move at all gets one retry first,
+    /// since the SET may have been lost. Forgotten on every connect. The Auto
+    /// engine checks this so it never re-sends a value the unit declined.
+    bool refusedSetpoint(float tempC) const {
+        const float q = quantizeSetpoint(tempC);
+        taskENTER_CRITICAL(&_mux);
+        const bool awaiting = _wanted.hasTemp && (_wanted.sentFlags & CN105_FLAG_TEMP) &&
+                              quantizeSetpoint(_wanted.targetTemp) == q;
+        const bool refused  = q == _refusedTemp && _state.targetTemp == _refusedAnswer &&
+                              _state.mode == _refusedMode;
+        taskEXIT_CRITICAL(&_mux);
+        return awaiting || refused;
+    }
+
     /// Communication-loss timeout: 6 × the runtime poll interval, floored at
     /// the compile-time default. The poll interval is user-settable up to
     /// 30 s; a fixed 12 s timeout would falsely declare the link dead there.
@@ -404,6 +429,16 @@ private:
     // CONNECT_OK. Both under _mux.
     uint32_t _externalAutoChanges = 0;
     bool     _settingsBaselined   = false;
+
+    // ── Refused setpoint (see refusedSetpoint()) ───────────────────────────
+    // The quantized value the unit declined, what it answered and in which
+    // mode; _unconfirmedTemp is a value whose first SET left the unit
+    // unmoved and is on its one retry. NAN = none. Reset on CONNECT_OK; all
+    // under _mux.
+    float    _refusedTemp     = NAN;
+    float    _refusedAnswer   = NAN;
+    uint8_t  _refusedMode     = 0;
+    float    _unconfirmedTemp = NAN;
 
     // ── RX buffer ───────────────────────────────────────────────────────────
     uint8_t  _rxBuf[32];

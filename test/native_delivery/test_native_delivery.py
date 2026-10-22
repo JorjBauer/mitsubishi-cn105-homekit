@@ -81,7 +81,7 @@ PUMP = r'''
 class Pump : public UartInterface {
 public:
  std::deque<uint8_t> rx;
- int infos=0,connects=0,sets=0,remoteSets=0,remoteClears=0;
+ int infos=0,connects=0,sets=0,remoteSets=0,remoteClears=0,dropTemp=0;
  bool responding=true;
  uint32_t readCostMs=0;
  uint8_t mode=CN105_MODE_AUTO;bool power=true;
@@ -103,6 +103,7 @@ public:
   if(b[1]==CN105_PKT_INFO_REQ){++infos;if(responding)packet(CN105_PKT_INFO_RESP,b[5]);}
   if(b[1]==CN105_PKT_SET){
    ++sets;
+   if(b[5]==1&&(b[6]&CN105_FLAG_TEMP)&&dropTemp>0){--dropTemp;return;}   // lost: not applied, not ACKed
    if(b[5]==0x07){if(b[6])++remoteSets;else ++remoteClears;}
    if(b[5]==1){if(b[6]&CN105_FLAG_POWER)power=b[8];if(b[6]&CN105_FLAG_MODE)mode=b[9];if(b[6]&CN105_FLAG_TEMP){if(b[19])target=b[19];else legacyC=31-b[10];}}
    if(responding)packet(CN105_PKT_SET_ACK,0);

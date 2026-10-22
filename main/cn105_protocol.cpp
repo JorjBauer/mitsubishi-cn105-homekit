@@ -154,6 +154,8 @@ void CN105Controller::loop() {
         _staged = PendingCommand{};
         _sendRequested = false;
         _wanted.hasBeenSent = true;
+        _wanted.sentFlags |= cmd.flags1;
+        if (cmd.flags1 & CN105_FLAG_TEMP) _wanted.tempAtSend = _state.targetTemp;
         taskEXIT_CRITICAL(&_mux);
         LOG_INFO("Sending pending set command (flags=0x%02X flags2=0x%02X)", cmd.flags1, cmd.flags2);
         sendSetPacket(cmd);
@@ -323,6 +325,7 @@ void CN105Controller::setPower(bool on) {
     _wanted.hasPower = true;
     _wanted.power = on;
     _wanted.hasBeenSent = false;
+    _wanted.sentFlags &= ~CN105_FLAG_POWER;
     _wanted.lastChange = now;
     taskEXIT_CRITICAL(&_mux);
 }
@@ -336,6 +339,7 @@ void CN105Controller::setMode(uint8_t mode) {
     _wanted.hasMode = true;
     _wanted.mode = mode;
     _wanted.hasBeenSent = false;
+    _wanted.sentFlags &= ~CN105_FLAG_MODE;
     _wanted.lastChange = now;
     taskEXIT_CRITICAL(&_mux);
 }
@@ -351,6 +355,7 @@ void CN105Controller::setTargetTemp(float tempC) {
     _wanted.hasTemp = true;
     _wanted.targetTemp = clamped;
     _wanted.hasBeenSent = false;
+    _wanted.sentFlags &= ~CN105_FLAG_TEMP;
     _wanted.lastChange = now;
     taskEXIT_CRITICAL(&_mux);
 }
@@ -364,6 +369,7 @@ void CN105Controller::setFanSpeed(uint8_t speed) {
     _wanted.hasFan = true;
     _wanted.fanSpeed = speed;
     _wanted.hasBeenSent = false;
+    _wanted.sentFlags &= ~CN105_FLAG_FAN;
     _wanted.lastChange = now;
     taskEXIT_CRITICAL(&_mux);
 }
@@ -377,6 +383,7 @@ void CN105Controller::setVane(uint8_t position) {
     _wanted.hasVane = true;
     _wanted.vane = position;
     _wanted.hasBeenSent = false;
+    _wanted.sentFlags &= ~CN105_FLAG_VANE;
     _wanted.lastChange = now;
     taskEXIT_CRITICAL(&_mux);
 }
@@ -699,6 +706,9 @@ void CN105Controller::processPacket(const uint8_t *pkt, uint8_t len) {
             // first SETTINGS of this connection is a baseline.
             taskENTER_CRITICAL(&_mux);
             _settingsBaselined = false;
+            // A refusal was the answer of the unit as it was then; after a
+            // reconnect it may answer differently.
+            _refusedTemp = _refusedAnswer = _unconfirmedTemp = NAN;
             taskEXIT_CRITICAL(&_mux);
             break;
 
@@ -883,16 +893,19 @@ void CN105Controller::handleInfoResponse(const uint8_t *data, uint8_t dataLen) {
     // External Auto change detection runs before the confirmation below
     // clears the wanted flags: those flags are what tells our own SET's
     // echo (or the unit's clamped version of it) apart from a wall
-    // controller's write. A field is ours while it has been sent and is
-    // still inside the grace window.
+    // controller's write. A field is ours while its latest value has been
+    // sent (per field: sentFlags) and is still inside the grace window.
+    const bool wasBaselined = _settingsBaselined;
     if (settingsDecoded) {
         if (_settingsBaselined) {
             const bool autoNow    = next.power && next.mode == CN105_MODE_AUTO;
             const bool autoBefore = _state.power && _state.mode == CN105_MODE_AUTO;
             const bool tempMoved  = fabsf(next.targetTemp - _state.targetTemp) > 0.01f;
             const bool inGrace    = (now - _wanted.lastChange) < CN105_GRACE_SAFETY_MS;
-            const bool ourTemp    = _wanted.hasTemp && _wanted.hasBeenSent && inGrace;
-            const bool ourEntry   = (_wanted.hasMode || _wanted.hasPower) && _wanted.hasBeenSent && inGrace;
+            const uint8_t sent    = _wanted.sentFlags;
+            const bool ourTemp    = _wanted.hasTemp && (sent & CN105_FLAG_TEMP) && inGrace;
+            const bool ourEntry   = ((_wanted.hasMode && (sent & CN105_FLAG_MODE)) ||
+                                     (_wanted.hasPower && (sent & CN105_FLAG_POWER))) && inGrace;
             if (autoNow && ((!autoBefore && !ourEntry) || (autoBefore && tempMoved && !ourTemp)))
                 _externalAutoChanges++;
         }
@@ -910,14 +923,42 @@ void CN105Controller::handleInfoResponse(const uint8_t *data, uint8_t dataLen) {
             _wanted.hasPower = false;
         if (_wanted.hasMode && next.mode == _wanted.mode)
             _wanted.hasMode = false;
-        if (_wanted.hasTemp && fabsf(next.targetTemp - quantizeSetpoint(_wanted.targetTemp)) < 0.3f)
-            _wanted.hasTemp = false;
         if (_wanted.hasFan && next.fanSpeed == _wanted.fanSpeed)
             _wanted.hasFan = false;
         if (_wanted.hasVane && next.vane == _wanted.vane)
             _wanted.hasVane = false;
         if (_wanted.hasWideVane && next.wideVane == _wanted.wideVane)
             _wanted.hasWideVane = false;
+    }
+    // The setpoint confirms on its own sent flag, so a command for another
+    // field staged meanwhile cannot hold a matching answer open (and the
+    // refusal check below can never see our own value as a refusal).
+    if (settingsDecoded && _wanted.hasTemp && (_wanted.sentFlags & CN105_FLAG_TEMP) &&
+        fabsf(next.targetTemp - quantizeSetpoint(_wanted.targetTemp)) < 0.3f) {
+        _wanted.hasTemp = false;
+        _unconfirmedTemp = NAN;
+    }
+    // Grace over and the unit still reports another setpoint: that is its
+    // answer. A unit that moved took the SET and settled elsewhere — it will
+    // not hold our value, so latch the refusal (refusedSetpoint). One that
+    // stayed put may have lost the SET, so the value gets one retry before
+    // it is latched. Either way the declined value stops masking the real
+    // one. The first answer of a connection has nothing to compare against.
+    if (settingsDecoded && _wanted.hasTemp && (_wanted.sentFlags & CN105_FLAG_TEMP) &&
+        (now - _wanted.lastChange) >= CN105_GRACE_SAFETY_MS) {
+        const float q = quantizeSetpoint(_wanted.targetTemp);
+        const bool moved = fabsf(next.targetTemp - _wanted.tempAtSend) > 0.01f;
+        if (wasBaselined) {
+            if (moved || q == _unconfirmedTemp) {
+                _refusedTemp = q;
+                _refusedAnswer = next.targetTemp;
+                _refusedMode = next.mode;
+                _unconfirmedTemp = NAN;
+            } else {
+                _unconfirmedTemp = q;
+            }
+        }
+        _wanted.hasTemp = false;
     }
     taskEXIT_CRITICAL(&_mux);
 }

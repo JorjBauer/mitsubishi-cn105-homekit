@@ -458,9 +458,11 @@ void homekit_sync_thermostat(CN105Controller &cn105)
     // Dual-setpoint AUTO: drive the unit's single setpoint from the two
     // HomeKit thresholds. The resolved target is compared against the
     // *effective* setpoint (wanted value during the grace window, heat-pump-
-    // confirmed after), so a lost SET or a setpoint left over from another
-    // mode self-corrects on a later pass — there is deliberately no "last
-    // sent" shadow state to go stale. A setpoint written at the unit's own
+    // confirmed after), so a setpoint left over from another mode self-
+    // corrects on a later pass. A value the unit declined is not re-sent
+    // while the unit keeps its answer (refusedSetpoint) — a lost SET gets
+    // one retry, a clamped one none — so an out-of-range band cannot turn
+    // into a SET every grace window. A setpoint written at the unit's own
     // controller is NOT corrected: that hands the range to the unit
     // (auto_band.h) and the engine stays silent until this device writes
     // the band again.
@@ -468,7 +470,8 @@ void homekit_sync_thermostat(CN105Controller &cn105)
         AutoTarget want = resolveAutoTarget(s);
         // Quantize both sides: on a legacy-encoding unit the wanted value
         // (stored raw) would otherwise never match the whole degree it reports.
-        if (fabsf(cn105.quantizeSetpoint(want.setpoint) - cn105.quantizeSetpoint(s.targetTemp)) > want.resendDeadband) {
+        if (fabsf(cn105.quantizeSetpoint(want.setpoint) - cn105.quantizeSetpoint(s.targetTemp)) > want.resendDeadband &&
+            !cn105.refusedSetpoint(want.setpoint)) {
             LOG_INFO("[HK:Thermo] AUTO target %.1fC (unit at %.1f, room %.1f, heat %.1f, cool %.1f)",
                      want.setpoint, s.targetTemp, s.roomTemp,
                      settings.get().heatingThreshold, settings.get().coolingThreshold);
