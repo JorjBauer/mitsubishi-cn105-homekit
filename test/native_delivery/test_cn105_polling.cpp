@@ -104,4 +104,20 @@ int main(int, char** argv) {
   pump.target=166;pump.responding=true;now_ms+=4000;ticks(c,300,10);
   CHECK(c.isHealthy());CHECK(c.getState().targetTemp==19);CHECK(c.externalAutoChanges()==0);
  }
+ // A fan command staged while the confirmation of our own setpoint or Auto
+ // entry is on the wire must not make that change look like somebody else's.
+ CASE("own_set_with_fan_staged_mid_poll_not_counted") {
+  now_ms=5000;c.begin(&pump);ticks(c);
+  c.setTargetTemp(24);c.sendPendingChanges();c.loop();CHECK(pump.sets==1);
+  int infos=pump.infos;while(pump.infos==infos){now_ms+=10;c.loop();}   // SETTINGS requested, answer queued
+  c.setFanSpeed(CN105_FAN_2);c.sendPendingChanges();ticks(c,300,10);
+  CHECK(pump.target==176);CHECK(pump.sets==2);CHECK(c.externalAutoChanges()==0);
+ }
+ CASE("own_auto_entry_with_fan_staged_mid_poll_not_counted") {
+  pump.mode=CN105_MODE_HEAT;now_ms=5000;c.begin(&pump);ticks(c);
+  c.setMode(CN105_MODE_AUTO);c.sendPendingChanges();c.loop();CHECK(pump.sets==1);
+  int infos=pump.infos;while(pump.infos==infos){now_ms+=10;c.loop();}
+  c.setFanSpeed(CN105_FAN_2);c.sendPendingChanges();ticks(c,300,10);
+  CHECK(pump.mode==CN105_MODE_AUTO);CHECK(pump.sets==2);CHECK(c.externalAutoChanges()==0);
+ }
 }

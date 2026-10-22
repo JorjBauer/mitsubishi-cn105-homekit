@@ -168,6 +168,11 @@ struct WantedSettings {
     bool hasWideVane = false;
 
     bool hasBeenSent = false;   // Set packet was transmitted to heat pump
+    // CN105_FLAG_* of the fields whose latest wanted value has been
+    // transmitted. hasBeenSent is shared by every field — a fan command
+    // staged after our setpoint went out clears it — so change attribution
+    // (externalAutoChanges) asks per field instead.
+    uint8_t  sentFlags = 0;
     uint32_t lastChange = 0;    // uptime_ms() of most recent user command
 };
 

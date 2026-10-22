@@ -154,6 +154,7 @@ void CN105Controller::loop() {
         _staged = PendingCommand{};
         _sendRequested = false;
         _wanted.hasBeenSent = true;
+        _wanted.sentFlags |= cmd.flags1;
         taskEXIT_CRITICAL(&_mux);
         LOG_INFO("Sending pending set command (flags=0x%02X flags2=0x%02X)", cmd.flags1, cmd.flags2);
         sendSetPacket(cmd);
@@ -323,6 +324,7 @@ void CN105Controller::setPower(bool on) {
     _wanted.hasPower = true;
     _wanted.power = on;
     _wanted.hasBeenSent = false;
+    _wanted.sentFlags &= ~CN105_FLAG_POWER;
     _wanted.lastChange = now;
     taskEXIT_CRITICAL(&_mux);
 }
@@ -336,6 +338,7 @@ void CN105Controller::setMode(uint8_t mode) {
     _wanted.hasMode = true;
     _wanted.mode = mode;
     _wanted.hasBeenSent = false;
+    _wanted.sentFlags &= ~CN105_FLAG_MODE;
     _wanted.lastChange = now;
     taskEXIT_CRITICAL(&_mux);
 }
@@ -351,6 +354,7 @@ void CN105Controller::setTargetTemp(float tempC) {
     _wanted.hasTemp = true;
     _wanted.targetTemp = clamped;
     _wanted.hasBeenSent = false;
+    _wanted.sentFlags &= ~CN105_FLAG_TEMP;
     _wanted.lastChange = now;
     taskEXIT_CRITICAL(&_mux);
 }
@@ -364,6 +368,7 @@ void CN105Controller::setFanSpeed(uint8_t speed) {
     _wanted.hasFan = true;
     _wanted.fanSpeed = speed;
     _wanted.hasBeenSent = false;
+    _wanted.sentFlags &= ~CN105_FLAG_FAN;
     _wanted.lastChange = now;
     taskEXIT_CRITICAL(&_mux);
 }
@@ -377,6 +382,7 @@ void CN105Controller::setVane(uint8_t position) {
     _wanted.hasVane = true;
     _wanted.vane = position;
     _wanted.hasBeenSent = false;
+    _wanted.sentFlags &= ~CN105_FLAG_VANE;
     _wanted.lastChange = now;
     taskEXIT_CRITICAL(&_mux);
 }
@@ -883,16 +889,18 @@ void CN105Controller::handleInfoResponse(const uint8_t *data, uint8_t dataLen) {
     // External Auto change detection runs before the confirmation below
     // clears the wanted flags: those flags are what tells our own SET's
     // echo (or the unit's clamped version of it) apart from a wall
-    // controller's write. A field is ours while it has been sent and is
-    // still inside the grace window.
+    // controller's write. A field is ours while its latest value has been
+    // sent (per field: sentFlags) and is still inside the grace window.
     if (settingsDecoded) {
         if (_settingsBaselined) {
             const bool autoNow    = next.power && next.mode == CN105_MODE_AUTO;
             const bool autoBefore = _state.power && _state.mode == CN105_MODE_AUTO;
             const bool tempMoved  = fabsf(next.targetTemp - _state.targetTemp) > 0.01f;
             const bool inGrace    = (now - _wanted.lastChange) < CN105_GRACE_SAFETY_MS;
-            const bool ourTemp    = _wanted.hasTemp && _wanted.hasBeenSent && inGrace;
-            const bool ourEntry   = (_wanted.hasMode || _wanted.hasPower) && _wanted.hasBeenSent && inGrace;
+            const uint8_t sent    = _wanted.sentFlags;
+            const bool ourTemp    = _wanted.hasTemp && (sent & CN105_FLAG_TEMP) && inGrace;
+            const bool ourEntry   = ((_wanted.hasMode && (sent & CN105_FLAG_MODE)) ||
+                                     (_wanted.hasPower && (sent & CN105_FLAG_POWER))) && inGrace;
             if (autoNow && ((!autoBefore && !ourEntry) || (autoBefore && tempMoved && !ourTemp)))
                 _externalAutoChanges++;
         }
