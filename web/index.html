@@ -1583,36 +1583,40 @@ a:focus-visible,button:focus-visible,input:focus-visible,select:focus-visible{ou
     var host=location.hostname||'192.168.1.1';
     // Use the same port the page was served from (empty => default 80).
     var portPart=location.port?(':'+location.port):'';
-    ws=new WebSocket('ws://'+host+portPart+'/ws');
+    var socket=new WebSocket('ws://'+host+portPart+'/ws');
+    ws=socket;
 
     // Timeout: if not open within 5s, kill and retry (Safari CONNECTING hang)
     if(connectTimeout) clearTimeout(connectTimeout);
     connectTimeout=setTimeout(function(){
+      if(ws!==socket) return;
       connectTimeout=null;
-      if(ws && ws.readyState===0){
-        try{ws.close();}catch(e){}
+      if(socket.readyState===0){
+        try{socket.close();}catch(e){}
         ws=null;
         scheduleReconnect();
       }
     },5000);
 
-    ws.onopen=function(){
+    socket.onopen=function(){
+      if(ws!==socket) return;
       if(connectTimeout){clearTimeout(connectTimeout);connectTimeout=null}
       lastConnectedAt=Date.now();
       setConnState('connected');
       if(reconnTimer){clearTimeout(reconnTimer);reconnTimer=null}
       reconnDelay=0;
-      try{ws.send('{"cmd":"diag"}')}catch(e){}   // populate the device events list
+      try{socket.send('{"cmd":"diag"}')}catch(e){}   // populate the device events list
       lastMsgTime=Date.now();
       if(hbTimer) clearInterval(hbTimer);
       hbTimer=setInterval(function(){
-        if(ws && Date.now()-lastMsgTime>5000){
-          try{ws.close();}catch(e){}
+        if(ws===socket && Date.now()-lastMsgTime>5000){
+          try{socket.close();}catch(e){}
         }
       },2000);
     };
 
-    ws.onclose=function(){
+    socket.onclose=function(){
+      if(ws!==socket) return;
       if(connectTimeout){clearTimeout(connectTimeout);connectTimeout=null}
       setConnState('reconnecting');
       ws=null;
@@ -1620,11 +1624,13 @@ a:focus-visible,button:focus-visible,input:focus-visible,select:focus-visible{ou
       scheduleReconnect();
     };
 
-    ws.onerror=function(){
-      if(ws) try{ws.close();}catch(e){}
+    socket.onerror=function(){
+      if(ws!==socket) return;
+      try{socket.close();}catch(e){}
     };
 
-    ws.onmessage=function(ev){
+    socket.onmessage=function(ev){
+      if(ws!==socket) return;
       lastMsgTime=Date.now();
       try{
         var msg=JSON.parse(ev.data);
