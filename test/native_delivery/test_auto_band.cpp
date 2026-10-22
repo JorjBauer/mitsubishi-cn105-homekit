@@ -181,4 +181,22 @@ int main(int, char** argv) {
   const float rooms[]={18,19,20,21,22,23,24,25,26,27,26,24,22,20,18};const int want[]={1,1,1,1,2,2,3,3,4,4,4,4,5,6,6};
   int sets0=pump.sets;for(int i=0;i<15;i++){pump.roomRaw=(uint8_t)(rooms[i]*2+128);drive(c,pump,20000);CHECK(pump.sets-sets0==want[i]);}
  }
+ CASE("offline_main_loop_enforces_auto_band_before_homekit_starts") {
+  settings.get().heatingThreshold=27;settings.get().coolingThreshold=29;
+  CHECK(!homekit_is_started());
+  for(int i=0;i<100;i++){run_main_control_tick(c);c.loop();now_ms+=100;}
+  CHECK(pump.target==182);CHECK(c.getState().targetTemp==27);
+ }
+ CASE("offline_main_loop_respects_unit_owned_auto_band") {
+  settings.get().autoOwnerUnit=true;settings.get().heatingThreshold=27;settings.get().coolingThreshold=29;
+  CHECK(!homekit_is_started());int sets0=pump.sets;
+  for(int i=0;i<100;i++){run_main_control_tick(c);c.loop();now_ms+=100;}
+  CHECK(pump.sets==sets0);CHECK(c.getState().targetTemp==22);
+ }
+ CASE("safe_mode_does_not_run_auto_engine") {
+  safeMode=true;settings.get().heatingThreshold=27;settings.get().coolingThreshold=29;
+  int sets0=pump.sets;
+  for(int i=0;i<100;i++){run_main_control_tick(c);c.loop();now_ms+=100;}
+  CHECK(pump.sets==sets0);CHECK(c.getState().targetTemp==22);
+ }
 }

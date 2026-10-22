@@ -365,8 +365,13 @@ extern "C" void app_main(void)
         AutoBand::loop(cn105);
 
         // ── Push state to HomeKit (throttled internally) ─────────────────
-        if (homekit_is_started()) {
+        // The thermostat tick also enforces the AUTO temperature band for
+        // web/Dial control. It must run on an offline boot before HomeKit
+        // starts; its characteristic handles stay null until then.
+        if (!safeMode) {
             homekit_sync_thermostat(cn105);
+        }
+        if (homekit_is_started()) {
             homekit_sync_fan(cn105);
             homekit_sync_switches(cn105);
 #ifdef BLE_ENABLE

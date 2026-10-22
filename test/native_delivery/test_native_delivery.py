@@ -216,8 +216,33 @@ AUTO += "\n" + clean("auto_band.h") + clean("auto_band.cpp").replace('static con
 AUTO += "\n" + adapter[adapter.index("static uint8_t mode_to_sl2"):adapter.index("/* A bonded dial reported")]
 AUTO += "\n" + function(adapter, "h_get_caps")
 AUTO += "\n" + block(thermo, thermo.index("struct AutoTarget")) + ";\n" + function(thermo, "resolveAutoTarget")
-AUTO += "\nstatic void run_auto_sync(CN105Controller& cn105){const CN105State s=cn105.getEffectiveState();\n"
-AUTO += block(thermo, thermo.index("    if (s.power && s.mode == CN105_MODE_AUTO && AutoBand::deviceOwns())")) + "\n}\n" + PUMP
+# Run the complete thermostat tick with absent HAP handles, as on an offline
+# boot. Any accidental SDK access before HomeKit exists fails the test.
+AUTO += r'''
+union hap_val_t {uint32_t u;float f;bool b;};
+struct hap_char_t {};
+static const hap_val_t* hap_char_get_val(hap_char_t*) {CHECK(false);return nullptr;}
+static void hap_char_update_val(hap_char_t*,const hap_val_t*) {CHECK(false);}
+namespace RoomAvg {
+ struct Status {bool feeding;float effective;};
+ static Status status(){return {false,NAN};}
+}
+'''
+AUTO += thermo[thermo.index("static hap_char_t"):thermo.index("// ── External controller reference")]
+AUTO += "\n" + "\n".join(function(thermo, n) for n in
+    ["cn105ToHKTargetState", "deriveCurrentState", "homekit_sync_thermostat"])
+AUTO += "\nstatic void run_auto_sync(CN105Controller& cn105){homekit_sync_thermostat(cn105);}\n"
+# Execute the production main-loop dispatch, not a duplicate of its gating.
+app = (MAIN / "main.cpp").read_text()
+AUTO += r'''
+static bool safeMode=false,homekitStarted=false;
+static bool homekit_is_started(){return homekitStarted;}
+static void homekit_sync_fan(CN105Controller&){CHECK(homekitStarted);}
+static void homekit_sync_switches(CN105Controller&){CHECK(homekitStarted);}
+static void run_main_control_tick(CN105Controller& cn105){
+'''
+AUTO += app[app.index("        // ── Push state to HomeKit"):app.index("        // ── ESP-NOW remote")]
+AUTO += "\n}\n" + PUMP
 
 # H2 compiles SettingsStore and HomeKit setup intact against NVS/HAP boundaries.
 # The reset stub queues work: storage completion is delivered separately.
