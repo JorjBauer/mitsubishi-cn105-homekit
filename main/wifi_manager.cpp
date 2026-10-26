@@ -12,6 +12,7 @@
 #include <nvs_flash.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/event_groups.h>
+#include <freertos/semphr.h>
 
 static const char *TAG = "wifi";
 
@@ -66,6 +67,18 @@ static esp_timer_handle_t s_reconnectTimer = nullptr;
 // Written by connect() (httpd/main task) and the event handler; drained by
 // loop() on the main task. Spinlock-guarded like the other cross-task state.
 static constexpr uint32_t TRIAL_TIMEOUT_MS = 30000;
+// Serialize complete connect/commit/rollback operations, including NVS I/O.
+// The event callback only uses s_trialMux, never this task mutex. Always take
+// this mutex first, then the spinlock for short shared-state accesses.
+static StaticSemaphore_t s_trialOpsStorage;
+static SemaphoreHandle_t s_trialOps = nullptr;
+class TrialOperation {
+public:
+    TrialOperation() { xSemaphoreTake(s_trialOps, portMAX_DELAY); }
+    ~TrialOperation() { xSemaphoreGive(s_trialOps); }
+    TrialOperation(const TrialOperation &) = delete;
+    TrialOperation &operator=(const TrialOperation &) = delete;
+};
 static portMUX_TYPE s_trialMux = portMUX_INITIALIZER_UNLOCKED;
 static struct {
     bool active = false;
@@ -159,6 +172,9 @@ static void wifi_event_handler(void* arg, esp_event_base_t event_base,
 
 void WifiManager::init(const char* hostname, const char* apName, const char* apPassword)
 {
+    s_trialOps = xSemaphoreCreateMutexStatic(&s_trialOpsStorage);
+    configASSERT(s_trialOps);
+
     // Store AP credentials for later enableAP() calls
     if (apName) {
         strncpy(s_apName, apName, sizeof(s_apName) - 1);
@@ -216,9 +232,9 @@ void WifiManager::init(const char* hostname, const char* apName, const char* apP
 // Build + apply the STA config for the given credentials and reset the retry
 // budget — shared by connect() and the trial-revert path in loop() so the
 // auth/PMF policy lives in one place.
-static void applyStaConfig(const char *ssid, const char *password)
+static bool applyStaConfig(const char *ssid, const char *password)
 {
-    if (settings.isFactoryResetting()) return;
+    if (settings.isFactoryResetting()) return false;
     wifi_config_t cfg = {};
     // STA fields are fixed-width bytes, not necessarily NUL-terminated.
     // Full-length credentials use every byte; shorter values keep a zero tail.
@@ -231,8 +247,13 @@ static void applyStaConfig(const char *ssid, const char *password)
     }
     cfg.sta.pmf_cfg.capable  = true;
     cfg.sta.pmf_cfg.required = false;
-    ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &cfg));
+    esp_err_t err = esp_wifi_set_config(WIFI_IF_STA, &cfg);
+    if (err != ESP_OK) {
+        LOG_ERROR("WiFi configuration failed: %s", esp_err_to_name(err));
+        return false;
+    }
     s_retryCount = 0;
+    return true;
 }
 
 bool WifiManager::connect(const char* ssid, const char* password)
@@ -249,6 +270,11 @@ bool WifiManager::connect(const char* ssid, const char* password)
         LOG_ERROR("WiFi network name or password exceeds its byte limit");
         return false;
     }
+
+    TrialOperation operation;
+    // A busy driver or invalid configuration must not replace the existing
+    // trial. Callers can report rejection without rebooting or losing rollback.
+    if (!applyStaConfig(ssid, password)) return false;
 
     // Test-then-commit: don't persist yet. If these credentials fail to join,
     // the previous (working) ones must survive in NVS — a typo in the recovery
@@ -282,8 +308,6 @@ bool WifiManager::connect(const char* ssid, const char* password)
         }
         portEXIT_CRITICAL(&s_trialMux);
     }
-
-    applyStaConfig(ssid, password);
 
     // Fresh credentials get a fresh retry budget — no stale delayed retry
     if (s_reconnectTimer) esp_timer_stop(s_reconnectTimer);
@@ -332,9 +356,11 @@ void WifiManager::loop()
     if (nowMs - s_lastTrialCheck < 250) return;
     s_lastTrialCheck = nowMs;
 
-    // Snapshot under the lock; NVS/esp_wifi work happens outside it. The
-    // credential copies matter: a concurrent connect() may overwrite
-    // s_trial.* the moment the lock is released.
+    TrialOperation operation;
+
+    // The task mutex excludes connect() throughout persistence/finalization.
+    // Snapshot under the spinlock too, since GOT_IP can still set commitPending.
+    // NVS and driver work must happen with interrupts enabled.
     portENTER_CRITICAL(&s_trialMux);
     // Clock read in here too, not the gate's nowMs above: a connect() on the
     // httpd/Improv task landing in that gap stamps startMs *after* the sample,
@@ -359,7 +385,9 @@ void WifiManager::loop()
     if (!active && !late) return;
 
     if (commit) {
-        saveCredentials(newSsid, newPass);
+        // Keep the trial pending if any write fails. A later tick retries;
+        // the portal must not close or announce success without persistence.
+        if (!saveCredentials(newSsid, newPass)) return;
         portENTER_CRITICAL(&s_trialMux);
         s_trial.active = false;
         s_trial.commitPending = false;
@@ -372,6 +400,9 @@ void WifiManager::loop()
     }
 
     if (expired) {
+        // The driver can reject a config while a connection attempt is in
+        // flight. Keep the trial active until restoration actually succeeds.
+        if (haveOld && !applyStaConfig(oldSsid, oldPass)) return;
         portENTER_CRITICAL(&s_trialMux);
         s_trial.active = false;
         s_trial.result = WIFI_TRIAL_FAILED;  // latched until the next connect()
@@ -383,7 +414,6 @@ void WifiManager::loop()
         if (haveOld) {
             LOG_WARN("Trial join to '%s' failed — restoring previous network '%s'",
                      newSsid, oldSsid);
-            applyStaConfig(oldSsid, oldPass);
             esp_wifi_connect();
         } else {
             LOG_WARN("Trial join to '%s' has not landed in %lus — still retrying; "
@@ -534,23 +564,29 @@ bool WifiManager::loadCredentials(char* ssid, size_t ssidLen, char* password, si
     return found;
 }
 
-void WifiManager::saveCredentials(const char* ssid, const char* password)
+bool WifiManager::saveCredentials(const char* ssid, const char* password)
 {
-    if (settings.isFactoryResetting()) return;
+    if (settings.isFactoryResetting()) return false;
     nvs_handle_t handle;
     esp_err_t err = nvs_open(NVS_NAMESPACE, NVS_READWRITE, &handle);
     if (err != ESP_OK) {
         LOG_ERROR("Failed to open NVS for writing: %s", esp_err_to_name(err));
-        return;
+        return false;
     }
 
-    nvs_set_str(handle, NVS_KEY_SSID, ssid);
-    nvs_set_str(handle, NVS_KEY_PASS, password ? password : "");
-    nvs_commit(handle);
+    err = nvs_set_str(handle, NVS_KEY_SSID, ssid);
+    if (err == ESP_OK)
+        err = nvs_set_str(handle, NVS_KEY_PASS, password ? password : "");
+    if (err == ESP_OK) err = nvs_commit(handle);
     nvs_close(handle);
+    if (err != ESP_OK) {
+        LOG_ERROR("Failed to save WiFi credentials: %s", esp_err_to_name(err));
+        return false;
+    }
 
     s_haveCreds = 1;
     LOG_INFO("Credentials saved (SSID: %s)", ssid);
+    return true;
 }
 
 void WifiManager::eraseCredentials()

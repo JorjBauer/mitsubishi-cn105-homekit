@@ -72,8 +72,8 @@ bool WifiManager::loadCredentials(char *ssid, size_t, char *pass, size_t) {
 bool WifiManager::isJoinPending() { return false; }
 WifiManager::WifiTrialState WifiManager::getTrialState() { return WifiManager::WIFI_TRIAL_IDLE; }
 int WifiManager::scanNetworks(ScannedNetwork *, int) { ++scans; return 0; }
-struct DeviceSettings { const char *deviceName = "Display Label"; bool homekitPaired = false; };
-static struct { const DeviceSettings &get() { static DeviceSettings cfg; return cfg; } } settings;
+struct DeviceSettings { const char *deviceName = "Display Label"; bool homekitPaired = false; char trustedHost[64] = ""; };
+static struct { DeviceSettings &get() { static DeviceSettings cfg; return cfg; } } settings;
 static int homekit_get_controller_count() { return 0; }
 static const char *homekit_get_setup_code() { return "123-45-678"; }
 using ErrorHandler = esp_err_t (*)(httpd_req_t *, httpd_err_code_t);
@@ -131,6 +131,19 @@ int main() {
     expectGuard("evil.example", "http://evil.example", false);
     expectGuard("192.168.1.50", "null", false);
     expectGuard("192.168.4.1", "http://192.168.4.1", true);
+    // The trusted hostname: that exact name, any case, port 80 only.
+    expectGuard("minisplit.example.com", "", false);
+    strcpy(settings.get().trustedHost, "minisplit.example.com");
+    for (const char *host : {"minisplit.example.com", "MiniSplit.Example.Com:80"})
+        expectGuard(host, "", true);
+    for (const char *host : {"minisplit.example.com:8080", "minisplit.example.com.evil.example",
+                             "evil.minisplit.example.com", "minisplit.example"})
+        expectGuard(host, "", false);
+    expectGuard("minisplit.example.com", "http://minisplit.example.com", true);
+    expectGuard("minisplit.example.com", "http://evil.example", false);
+    expectGuard("serin-ab12.local", "", true);   // the built-in names still work
+    settings.get().trustedHost[0] = '\0';
+    expectGuard("minisplit.example.com", "", false);
     currentIP = "192.168.1.77";
     expectGuard("192.168.1.50", "", false);
     expectGuard("192.168.1.77", "", true);

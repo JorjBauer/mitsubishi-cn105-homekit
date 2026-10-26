@@ -9,6 +9,7 @@ from pathlib import Path
 import re
 import subprocess
 import tempfile
+import sys
 
 ROOT = Path(__file__).resolve().parents[2]
 SOURCE = (ROOT / "main/wifi_manager.cpp").read_text()
@@ -29,6 +30,28 @@ PREFIX = r'''
 #include <cstring>
 #include <string>
 #include <cstdio>
+#include <mutex>
+#include <condition_variable>
+#include <thread>
+#include <chrono>
+using StaticSemaphore_t = std::mutex;
+using SemaphoreHandle_t = std::mutex*;
+constexpr int portMAX_DELAY = -1;
+std::mutex coordination;
+std::condition_variable progress;
+bool block_commit = false, commit_entered = false, release_commit = false;
+bool second_started = false, second_finished = false, operation_waiting = false;
+SemaphoreHandle_t xSemaphoreCreateMutexStatic(StaticSemaphore_t *storage) { return storage; }
+int xSemaphoreTake(SemaphoreHandle_t sem, int) {
+    if (!sem->try_lock()) {
+        { std::lock_guard<std::mutex> lock(coordination); operation_waiting = true; }
+        progress.notify_all();
+        sem->lock();
+    }
+    return 1;
+}
+void xSemaphoreGive(SemaphoreHandle_t sem) { sem->unlock(); }
+#define configASSERT(expr) assert(expr)
 using esp_err_t = int;
 using esp_event_base_t = int;
 constexpr int ESP_OK = 0, WIFI_IF_STA = 0, WIFI_AUTH_OPEN = 0, WIFI_AUTH_WPA2_PSK = 3;
@@ -77,12 +100,14 @@ static uint32_t now_ms, s_retryCount, s_disconnects;
 static bool s_connected, s_wifiScanning, s_expectDisconnect, s_pendingJoin;
 static void *s_wifiEventGroup = nullptr, *s_reconnectTimer = nullptr;
 static int writes, connects, saves;
-static bool read_ok = true;
+static bool read_ok = true, config_failure = false;
+static int nvs_failure = 0, s_haveCreds = -1;
 static wifi_config_t driver;
 static std::string stored_ssid, stored_psk;
 static uint32_t uptime_ms() { return now_ms; }
 static esp_err_t esp_wifi_set_config(int iface, const wifi_config_t *cfg)
 {
+    if (config_failure) return -2;
     if (iface == WIFI_IF_AP) { apDriver = *cfg; ++apWrites; }
     else { assert(iface == WIFI_IF_STA); driver = *cfg; ++writes; }
     return ESP_OK;
@@ -107,8 +132,35 @@ bool WifiManager::loadCredentials(char *ssid, size_t sl, char *psk, size_t pl)
     memcpy(psk, stored_psk.c_str(), stored_psk.size() + 1);
     return true;
 }
-void WifiManager::saveCredentials(const char *ssid, const char *psk)
-{ stored_ssid = ssid; stored_psk = psk; ++saves; }
+using nvs_handle_t = int;
+constexpr int NVS_READWRITE = 1;
+static const char *NVS_NAMESPACE = "wifi-creds", *NVS_KEY_SSID = "ssid", *NVS_KEY_PASS = "password";
+std::string pending_ssid, pending_psk;
+int nvs_open(const char *, int, nvs_handle_t *handle) {
+    *handle = 1; return nvs_failure == 1 ? -1 : ESP_OK;
+}
+int nvs_set_str(nvs_handle_t, const char *key, const char *value) {
+    if (strcmp(key, "ssid") == 0) {
+        if (nvs_failure == 2) return -1;
+        pending_ssid = value;
+    } else {
+        if (nvs_failure == 3) return -1;
+        pending_psk = value;
+    }
+    return ESP_OK;
+}
+int nvs_commit(nvs_handle_t) {
+    if (block_commit) {
+        std::unique_lock<std::mutex> lock(coordination);
+        commit_entered = true;
+        progress.notify_all();
+        progress.wait(lock, [] { return release_commit; });
+    }
+    if (nvs_failure == 4) return -1;
+    stored_ssid = pending_ssid; stored_psk = pending_psk; ++saves;
+    return ESP_OK;
+}
+void nvs_close(nvs_handle_t) {}
 '''
 
 CHECKS = r'''
@@ -123,6 +175,7 @@ static void fresh(const std::string &ssid = "", const std::string &psk = "")
     stored_ssid = ssid; stored_psk = psk;
     memset(&driver, 0xa5, sizeof driver);
     read_ok = true;
+    config_failure = false; nvs_failure = 0; s_haveCreds = -1;
 }
 static void expect_driver(const std::string &ssid, const std::string &psk)
 {
@@ -154,7 +207,9 @@ static void reset_checks(const char *name)
     } else if (!strcmp(name, "trial_commit")) {
         got_ip();
     } else if (!strcmp(name, "sta_config")) {
-        applyStaConfig("late-network", "late-password");
+        assert(!applyStaConfig("late-network", "late-password"));
+    } else if (!strcmp(name, "save")) {
+        assert(!WifiManager::saveCredentials("late-network", "late-password"));
     } else if (!strcmp(name, "connect")) {
         assert(!WifiManager::connect("late-network", "late-password"));
     } else if (!strcmp(name, "enable_ap")) {
@@ -166,7 +221,15 @@ static void reset_checks(const char *name)
 }
 int main(int argc, char **argv)
 {
-    if (argc > 1) { reset_checks(argv[1]); return 0; }
+    init_test_mutex();
+    if (argc > 1) {
+        if (!strncmp(argv[1], "factory_reset/", 14)) {
+            reset_checks(argv[1] + 14);
+            printf("PASS: %s\n", argv[1]);
+            return 0;
+        }
+        return regression(argv[1]);
+    }
     const std::string max_ssid(32, 's'), max_key(64, 'a');
     // Initial join -> real IP event -> delayed persistence -> normal reconnect.
     fresh();
@@ -242,29 +305,110 @@ int main(int argc, char **argv)
 }
 '''
 
+REGRESSIONS = r'''
+static int regression(const std::string &name) {
+    fresh("old-network", "old-password");
+    if (name == "config_rejected") {
+        assert(WifiManager::connect("first-trial", "first-password"));
+        config_failure = true;
+        assert(!WifiManager::connect("rejected-trial", "second-password"));
+        assert(WifiManager::getTrialState() == WifiManager::WIFI_TRIAL_TESTING);
+        config_failure = false;
+        got_ip();
+        assert(stored_ssid == "first-trial");
+    } else if (name == "rollback_retries") {
+        assert(WifiManager::connect("new-network", "incorrect-password"));
+        config_failure = true;
+        now_ms += 31000;
+        WifiManager::loop();
+        assert(WifiManager::getTrialState() == WifiManager::WIFI_TRIAL_TESTING);
+        assert(connects == 1);
+        config_failure = false;
+        now_ms += 300;
+        WifiManager::loop();
+        assert(WifiManager::getTrialState() == WifiManager::WIFI_TRIAL_FAILED);
+        expect_driver("old-network", "old-password");
+    } else if (name.rfind("nvs_", 0) == 0) {
+        assert(WifiManager::connect("new-network", "new-password"));
+        nvs_failure = std::stoi(name.substr(4));
+        got_ip();
+        assert(WifiManager::getTrialState() == WifiManager::WIFI_TRIAL_TESTING);
+        assert(s_haveCreds != 1 && saves == 0);
+        nvs_failure = 0;
+        now_ms += 1000;
+        WifiManager::loop();
+        assert(WifiManager::getTrialState() == WifiManager::WIFI_TRIAL_SUCCESS);
+        assert(stored_ssid == "new-network" && stored_psk == "new-password");
+        assert(saves == 1 && s_haveCreds == 1);
+    } else if (name == "concurrent_submission") {
+        assert(WifiManager::connect("first-trial", "first-password"));
+        ip_event_got_ip_t event = {};
+        wifi_event_handler(nullptr, IP_EVENT, IP_EVENT_STA_GOT_IP, &event);
+        now_ms += 300;
+        block_commit = true;
+        std::thread committer([] { WifiManager::loop(); });
+        {
+            std::unique_lock<std::mutex> lock(coordination);
+            assert(progress.wait_for(lock, std::chrono::seconds(3), [] { return commit_entered; }));
+        }
+        std::thread submitter([] {
+            assert(WifiManager::connect("newer-trial", "newer-password"));
+            { std::lock_guard<std::mutex> lock(coordination); second_finished = true; }
+            progress.notify_all();
+        });
+        {
+            std::unique_lock<std::mutex> lock(coordination);
+            assert(progress.wait_for(lock, std::chrono::seconds(3), [] {
+                return operation_waiting || second_finished;
+            }));
+            release_commit = true;
+        }
+        progress.notify_all();
+        committer.join(); submitter.join();
+        block_commit = false;
+        assert(WifiManager::getTrialState() == WifiManager::WIFI_TRIAL_TESTING);
+        assert(stored_ssid == "first-trial");
+        got_ip();
+        assert(stored_ssid == "newer-trial" && stored_psk == "newer-password");
+    } else { assert(false); }
+    printf("PASS: %s\n", name.c_str());
+    return 0;
+}
+'''
+
 state = re.search(r"^static constexpr uint32_t TRIAL_TIMEOUT_MS.*?^\} s_trial;",
                   SOURCE, re.MULTILINE | re.DOTALL)
 assert state, "cannot find trial state"
 settings_source = (ROOT / "main/settings.cpp").read_text()
 latch = re.search(r"^static std::atomic<bool> s_factoryResetting[^;]+;", settings_source, re.M)
 assert latch, "cannot find factory reset latch"
-reset_state = latch[0] + "\n" + "\n".join(function(n, settings_source) for n in
+write_mutex = re.search(r"^static std::mutex s_settingsWriteMutex;", settings_source, re.M)
+assert write_mutex, "cannot find settings write/reset mutex"
+reset_state = latch[0] + "\n" + write_mutex[0] + "\n" + "\n".join(function(n, settings_source) for n in
     ["SettingsStore::beginFactoryReset", "SettingsStore::isFactoryResetting"])
 functions = ["wifi_event_handler", "applyStaConfig", "WifiManager::connect",
              "WifiManager::getTrialState", "WifiManager::loop", "WifiManager::getSSID",
-             "WifiManager::enableAP", "WifiManager::disableAP"]
+             "WifiManager::enableAP", "WifiManager::disableAP",
+             "WifiManager::saveCredentials"]
 with tempfile.TemporaryDirectory(prefix="homekit-wifi-creds-") as tmp:
     unit = Path(tmp) / "test.cpp"
-    unit.write_text(PREFIX + "\n" + reset_state + "\n" + state[0] + "\n" + "\n".join(function(n) for n in functions) + CHECKS)
+    mutex_init = "static void init_test_mutex() { s_trialOps = xSemaphoreCreateMutexStatic(&s_trialOpsStorage); }\n"
+    declarations = "static int regression(const std::string &name);\n"
+    unit.write_text(PREFIX + "\n" + reset_state + "\n" + state[0] + "\n"
+                    + "\n".join(function(n) for n in functions)
+                    + mutex_init + declarations + CHECKS + REGRESSIONS)
     exe = Path(tmp) / "test"
     subprocess.run(["g++", "-std=c++17", "-Wall", "-Wextra", "-Werror",
-                    "-Wno-unused-parameter", "-fsanitize=address,undefined",
+                    "-Wno-unused-parameter", "-pthread", "-fsanitize=address,undefined",
                     "-fno-omit-frame-pointer", "-g", "-I" + str(ROOT / "main"),
                     str(unit), "-o", str(exe)], check=True)
-    cases = ["expired_trial", "trial_commit", "sta_config", "connect", "enable_ap", "disable_ap"]
-    results = [subprocess.run([str(exe)]).returncode]
-    for case in cases:
-        result = subprocess.run([str(exe), case]).returncode
-        print(f"factory_reset_wifi/{case}: {'PASS' if result == 0 else 'FAIL'}", flush=True)
-        results.append(result)
+    cases = sys.argv[1:] or [
+        "baseline", "config_rejected", "rollback_retries", "nvs_1", "nvs_2",
+        "nvs_3", "nvs_4", "concurrent_submission",
+        "factory_reset/expired_trial", "factory_reset/trial_commit",
+        "factory_reset/sta_config", "factory_reset/connect",
+        "factory_reset/enable_ap", "factory_reset/disable_ap", "factory_reset/save",
+    ]
+    results = [subprocess.run([str(exe)] + ([] if case == "baseline" else [case])).returncode
+               for case in cases]
     raise SystemExit(any(results))

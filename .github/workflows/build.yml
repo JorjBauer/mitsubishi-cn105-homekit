@@ -17,6 +17,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v6
+        with:
+          submodules: recursive
 
       - name: Checkout distribution validation tools
         uses: actions/checkout@v6
@@ -34,6 +36,8 @@ jobs:
 
       - name: Install release test dependencies
         run: |
+          sudo apt-get update
+          sudo apt-get install -y libcjson-dev pkg-config
           python3 -m pip install -r validation-tools/scripts/requirements-validation.txt \
             -r test/release_workflow/requirements.txt
 

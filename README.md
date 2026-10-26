@@ -127,8 +127,11 @@ idf.py -p /dev/ttyACM0 monitor
 For any board other than the NanoC6, add its [profile flag](#boards) to the build command. `sdkconfig` is generated and gitignored. `set-target` rewrites it, so switching targets in an existing checkout is safe, but copying someone else's `sdkconfig` is not.
 
 Host-side tests need no hardware and no ESP-IDF. Use Python 3.12 or newer,
-a C/C++ compiler, and a sibling checkout of the distribution repository with
-its release validator:
+a C/C++ compiler, Node.js, cJSON development headers and `pkg-config`, and a
+sibling checkout of the distribution repository with its release validator.
+On Debian/Ubuntu, install the cJSON dependency with
+`sudo apt-get install libcjson-dev pkg-config`. The credential tests can also
+use the cJSON source in `IDF_PATH` or `~/esp/esp-idf` when ESP-IDF is installed:
 
 ```bash
 git clone https://github.com/Serin-Labs/serin-cn105.git ../serin-cn105
@@ -387,7 +390,7 @@ The page is organised into cards:
 
 *The **Heat Pump · CN105** card, expanded.*
 
-The web UI has no login. Anyone on your local network who can reach the device can change its settings, so keep it off untrusted networks. LAN authentication is a planned feature. To block DNS rebinding, every web request must use the device's current connected WiFi IP, its configured mDNS hostname (bare or with `.local`), or the recovery AP IP `192.168.4.1`, with no port or port `80`. Foreign or malformed Host headers receive HTTP 403 even without an Origin header; any supplied Origin must also match the request hostname. The one exception is the recovery AP: a phone or laptop joined to it gets the static captive-portal redirect page for `/` and unknown paths whatever the Host, so the OS setup popup still appears. If it doesn't, open `http://192.168.4.1/` directly. The configured hostname remains allowed during recovery before HomeKit starts. The device also hides the HomeKit setup code once a controller has paired and asks you to type a confirmation word before Restart, Reset HomeKit Pairing, Forget Wi-Fi, or Factory Reset.
+The web UI has no login. Anyone on your local network who can reach the device can change its settings, so keep it off untrusted networks. LAN authentication is a planned feature. To block DNS rebinding, every web request must use the device's current connected WiFi IP, its configured mDNS hostname (bare or with `.local`), or the recovery AP IP `192.168.4.1`, with no port or port `80`. To use a name from your own DNS instead (say `minisplit.example.com`), enter it under **Device → Advanced → Trusted Hostname** while connected by IP; that exact name is then allowed too. Foreign or malformed Host headers receive HTTP 403 even without an Origin header; any supplied Origin must also match the request hostname. The one exception is the recovery AP: a phone or laptop joined to it gets the static captive-portal redirect page for `/` and unknown paths whatever the Host, so the OS setup popup still appears. If it doesn't, open `http://192.168.4.1/` directly. The configured hostname remains allowed during recovery before HomeKit starts. The device also hides the HomeKit setup code once a controller has paired and asks you to type a confirmation word before Restart, Reset HomeKit Pairing, Forget Wi-Fi, or Factory Reset.
 
 Under **Unit Capabilities**, unchecking a mode your unit doesn't have hides it here, in Apple Home, and on a paired Link. Because that changes the HomeKit accessory shape, the UI prompts for a restart afterward.
 

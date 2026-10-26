@@ -9,6 +9,7 @@
 #include "ble_config.h"
 #include "mode_caps.h"
 #include "cn105_baud.h"
+#include "setpoint_range.h"
 
 // Bump when a stored key's meaning or encoding changes, and add a
 // `if (storedVer < N) { ...migrate... }` branch in SettingsStore::begin().
@@ -49,6 +50,9 @@ struct DeviceSettings {
     uint32_t pollMs      = 2000;
     uint32_t cn105Baud   = CN105_BAUD_DEFAULT;  // 2400 or 9600 (cn105_baud.h)
     char     deviceName[32] = BRAND_NAME;
+    // One extra name the web UI answers to (web_security.h), for a device
+    // reached by a name on the user's own DNS. Empty = none.
+    char     trustedHost[64] = "";
     float    heatingThreshold = 20.0f;  // AUTO mode heating target
     float    coolingThreshold = 25.0f;  // AUTO mode cooling target
     // Night gate location (solar.h). NAN = unset: the SL2 night bits are
@@ -72,6 +76,11 @@ struct DeviceSettings {
     // Latched for good on the first send (main.cpp); gates the first-connect
     // clear of a value the pump kept across a restart (cn105 enableBootClear).
     bool     remoteEverFed = false;
+    // true = the heat pump's own controller (wall controller, IR remote) last
+    // set the Auto operating point; the dual-setpoint engine stays off until
+    // this device writes the band again (auto_band.h). Persisted so a reboot
+    // neither re-imposes a band on a wall user nor silences a HomeKit one.
+    bool     autoOwnerUnit = false;
     bool     wifiChangePending = false; // True after WiFi creds changed via web UI (shorter fallback timeout)
     uint8_t  vaneConfig = 2;          // 0=no vanes, 1=vertical only, 2=vertical+horizontal
     uint8_t  modeMask = MODE_CAP_ALL; // MODE_CAP_* bits — operating modes this unit supports (mode_caps.h)
@@ -131,10 +140,26 @@ inline float room_apply_offset(const DeviceSettings &s, int bit, float t) {
     return t + room_offset_dc(s, bit) / 10.0f;
 }
 
+struct SetpointSettings {
+    SetpointRange::Preferences preferences{};
+    SetpointRange::Band band{40, 50};
+    bool autoOwnerUnit = false;
+    SetpointRange::Encoding lastEncoding = SetpointRange::Encoding::Unknown;
+};
+
 class SettingsStore {
 public:
     void begin();
     void save();
+    SetpointSettings setpointSettings() const;
+    // False for malformed/unknown storage or an unconfirmed failed restoration.
+    // Only an explicit checked save repairs unavailable policy.
+    bool setpointSettingsAvailable() const;
+    // Structural persistence validation retains manual intent across encoding changes.
+    // The coordinator validates deliberate edits against the current encoding.
+    bool saveSetpointSettings(const SetpointSettings& next);
+    SetpointRange::Detection detectedRanges() const;
+    bool saveDetectedRanges(const SetpointRange::Detection& next);
     // Boot-latched before factory erase; all normal NVS writers must stop.
     static void beginFactoryReset();
     static bool isFactoryResetting();
@@ -145,6 +170,12 @@ public:
     uint32_t generation() const { return _generation; }
 private:
     void runKeyMigrations();
+    void syncSetpointViews();
+    bool saveSetpointSettingsLocked(const SetpointSettings& next);
+    SetpointSettings _setpoint;
+    SetpointRange::Detection _detected{};
+    bool _setpointAvailable = false;
+    bool _setpointStored = false;
     nvs_handle_t _handle = 0;
     DeviceSettings _settings;
     uint32_t _generation = 0;

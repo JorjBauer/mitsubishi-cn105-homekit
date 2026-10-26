@@ -8,8 +8,11 @@
 #include "homekit_setup.h"
 #include "logging.h"
 #include "status_led.h"
+#include "esp_utils.h"
+#include "cJSON.h"
 #include <cstring>
 #include <cstdio>
+#include <memory>
 #include <lwip/sockets.h>
 #include <array>
 #if !CONFIG_HTTPD_WS_PRE_HANDSHAKE_CB_SUPPORT
@@ -117,7 +120,7 @@ static bool requestHostAllowed(httpd_req_t *req) {
     if (WifiManager::isConnected()) WifiManager::getIP(staIP, sizeof(staIP));
     return hl > 0 && hl < sizeof(host) &&
            httpd_req_get_hdr_value_str(req, "Host", host, sizeof(host)) == ESP_OK &&
-           webHostAllowed(host, staIP, WifiManager::getHostname());
+           webHostAllowed(host, staIP, WifiManager::getHostname(), settings.get().trustedHost);
 }
 
 static void serveCNAPage(httpd_req_t *req);
@@ -200,7 +203,7 @@ bool WebUI::requireSameOrigin(httpd_req_t *req) {
     bool ok = ol < sizeof(origin) && hl > 0 && hl < sizeof(host) &&
               (ol == 0 || httpd_req_get_hdr_value_str(req, "Origin", origin, sizeof(origin)) == ESP_OK) &&
               httpd_req_get_hdr_value_str(req, "Host", host, sizeof(host)) == ESP_OK &&
-              webHostAllowed(host, staIP, hostname) &&
+              webHostAllowed(host, staIP, hostname, settings.get().trustedHost) &&
               webOriginAllowed(origin, host);
     if (!ok) {
         LOG_WARN("Rejected request to %s (Host: %.60s, Origin: %.60s)", req->uri, host, origin);
@@ -280,29 +283,68 @@ esp_err_t WebUI::handleWifiScan(httpd_req_t *req) {
 }
 
 bool WebUI::applyWifiCredentials(const char *json, const char **outError) {
-    char ssid[33] = {0};
-    char password[65] = {0};
-    if (!jsonGetString(json, "ssid", ssid, sizeof(ssid)) || strlen(ssid) == 0) {
+    // Bound cJSON's recursive parser before entering it. Credentials are a
+    // flat object; deeply nested input must not consume the HTTPD task stack.
+    // Reject decoded NULs too: cJSON and the WiFi driver expose C strings, so
+    // accepting one would silently turn the supplied credentials into a prefix.
+    bool inString = false;
+    unsigned depth = 0;
+    for (const char *p = json; *p; ++p) {
+        if (inString) {
+            if (*p == '\\') {
+                if (strncmp(p + 1, "u0000", 5) == 0) {
+                    *outError = "Credentials cannot contain NUL characters";
+                    return false;
+                }
+                if (p[1]) ++p;
+            } else if (*p == '"') {
+                inString = false;
+            }
+        } else if (*p == '"') {
+            inString = true;
+        } else if (*p == '{' || *p == '[') {
+            if (++depth > 8) {
+                *outError = "Credentials JSON is too deeply nested";
+                return false;
+            }
+        } else if ((*p == '}' || *p == ']') && depth) {
+            --depth;
+        }
+    }
+    std::unique_ptr<cJSON, decltype(&cJSON_Delete)> root(
+        cJSON_ParseWithOpts(json, nullptr, true), cJSON_Delete);
+    if (!root || !cJSON_IsObject(root.get())) {
+        *outError = "Invalid credentials JSON";
+        return false;
+    }
+    const cJSON *ssidValue = cJSON_GetObjectItemCaseSensitive(root.get(), "ssid");
+    const cJSON *passwordValue = cJSON_GetObjectItemCaseSensitive(root.get(), "password");
+    if (!cJSON_IsString(ssidValue) || !ssidValue->valuestring[0]) {
         *outError = "SSID is required";
         return false;
     }
-    // Password is optional (open networks send empty password), but one that is
-    // present and cannot be read whole (unterminated string) must fail the
-    // request rather than join with a truncated secret.
-    if (!jsonGetString(json, "password", password, sizeof(password)) &&
-        jsonHasKey(json, "password")) {
-        *outError = "Password is malformed";
+    // Password is optional (open networks send empty password)
+    if (passwordValue && !cJSON_IsString(passwordValue)) {
+        *outError = "Password must be a string";
+        return false;
+    }
+    const char *ssid = ssidValue->valuestring;
+    const char *password = passwordValue ? passwordValue->valuestring : "";
+    if (strlen(ssid) > 32 || strlen(password) > 64) {
+        *outError = "WiFi network name or password exceeds its byte limit";
         return false;
     }
     LOG_INFO("Applying WiFi credentials (SSID: %s)", ssid);
-    // Logs the ATTEMPT — the credentials themselves are only committed to NVS
-    // by WifiManager::loop() after the trial join succeeds.
-    eventlog_append(EV_WIFI_CREDS_CHANGED);
     // Trial-connect via WifiManager: NVS commit is deferred until GOT_IP;
     // on failure the previous credentials are restored (see wifi_manager.cpp)
-    WifiManager::connect(ssid, password);
+    if (!WifiManager::connect(ssid, password)) {
+        *outError = "Unable to start WiFi connection";
+        return false;
+    }
+    // Log only an admitted attempt; persistence still waits for join success.
+    eventlog_append(EV_WIFI_CREDS_CHANGED);
     // Mark change pending (shorter recovery timeout); also refreshes the
-    // cached SSID from the just-saved credentials
+    // cached SSID from the selected credentials
     wifiRecovery.setChangePending(true);
     // Let the change window close on join success (and stop treating STA
     // reconnects as old-network blips)
@@ -312,9 +354,8 @@ bool WebUI::applyWifiCredentials(const char *json, const char **outError) {
 
 esp_err_t WebUI::handleWifiSetup(httpd_req_t *req) {
     if (!requireSameOrigin(req)) return ESP_FAIL;
-    // Read the whole declared body (capped), never a prefix: a clipped body
-    // would end inside a JSON string and connect() would get a truncated
-    // password.
+    // Receive the entire bounded body before applying it. JSON escaping can
+    // expand valid credentials far beyond their decoded WiFi byte limits.
     int want = webBodyLen(req->content_len, WIFI_SETUP_MAX_BODY);
     if (want < 0) {
         httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST,
@@ -322,15 +363,25 @@ esp_err_t WebUI::handleWifiSetup(httpd_req_t *req) {
         return ESP_FAIL;
     }
     char body[WIFI_SETUP_MAX_BODY + 1];
-    int received = 0, stalls = 0;
+    constexpr uint32_t REQUEST_TIMEOUT_MS = 10000;
+    const uint32_t started = uptime_ms();
+    int received = 0;
     while (received < want) {
-        int r = httpd_req_recv(req, body + received, want - received);
-        if (r == HTTPD_SOCK_ERR_TIMEOUT && ++stalls < 3) continue;
-        if (r <= 0) {
-            httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Incomplete request");
+        if (static_cast<uint32_t>(uptime_ms() - started) >= REQUEST_TIMEOUT_MS) {
+            httpd_resp_send_err(req, HTTPD_408_REQ_TIMEOUT, "Credentials request timed out");
             return ESP_FAIL;
         }
-        received += r;
+        int n = httpd_req_recv(req, body + received, want - received);
+        if (n <= 0) {
+            httpd_resp_send_err(req, n == HTTPD_SOCK_ERR_TIMEOUT
+                ? HTTPD_408_REQ_TIMEOUT : HTTPD_400_BAD_REQUEST, "Incomplete credentials request");
+            return ESP_FAIL;
+        }
+        received += n;
+    }
+    if (memchr(body, '\0', received)) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Invalid credentials JSON");
+        return ESP_FAIL;
     }
     body[received] = '\0';
 

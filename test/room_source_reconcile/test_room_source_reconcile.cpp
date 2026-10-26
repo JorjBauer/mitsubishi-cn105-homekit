@@ -47,6 +47,12 @@ extern "C" bool sl2_link_dial_mac(const sl2_link_t *, int idx, uint8_t out[6]) {
     memcpy(out, dialMacs[idx], 6);
     return true;
 }
+extern "C" bool sl2_link_dial_view(sl2_link_t *link, int idx, sl2_dial_view_t *out) {
+    *out = sl2_dial_view_t{};
+    if (!sl2_link_dial_mac(link, idx, out->mac)) return false;
+    out->has_sensor = true;
+    return true;
+}
 
 #include "room_source.inc"
 

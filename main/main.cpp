@@ -34,6 +34,8 @@
 #include "web_server.h"
 #include "link_sensor.h"
 #include "room_avg.h"
+#include "auto_band.h"
+#include "setpoint_control.h"
 
 #ifdef BLE_ENABLE
 #include "ble_sensor.h"
@@ -151,6 +153,7 @@ extern "C" void app_main(void)
 
     // ── 3. Load persistent settings from NVS ─────────────────────────────
     settings.begin();
+    SetpointControl::begin(cn105);
 
     // ── 4. Logging init + apply saved log level ──────────────────────────
     logging_init();
@@ -359,9 +362,21 @@ extern "C" void app_main(void)
             }, "repl_init", 4096, nullptr, 2, nullptr) == pdPASS;
         }
 
+        // ── Correct manual-range violations before Auto ownership handover
+        //    and steering; this also runs before HomeKit starts. ────────────
+        if (!safeMode) {
+            SetpointControl::loop();
+            AutoBand::loop(cn105);
+        }
+
         // ── Push state to HomeKit (throttled internally) ─────────────────
-        if (homekit_is_started()) {
+        // The thermostat tick also enforces the AUTO temperature band for
+        // web/Dial control. It must run on an offline boot before HomeKit
+        // starts; its characteristic handles stay null until then.
+        if (!safeMode) {
             homekit_sync_thermostat(cn105);
+        }
+        if (homekit_is_started()) {
             homekit_sync_fan(cn105);
             homekit_sync_switches(cn105);
 #ifdef BLE_ENABLE
