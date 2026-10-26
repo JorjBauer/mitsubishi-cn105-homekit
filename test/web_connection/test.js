@@ -14,7 +14,7 @@ function setup() {
   let nextTimer = 1, visibility;
   const context = {
     ws: null, connectTimeout: null, reconnTimer: null, reconnDelay: 0,
-    hbTimer: null, lastConnectedAt: 0, lastMsgTime: 0,
+    hbTimer: null, lastConnectedAt: 0, lastMsgTime: 0, fwWait: null,
     location: { hostname: 'unit.local', port: '' },
     Date: { now: () => 10000 },
     document: { hidden: false, addEventListener: (_, callback) => { visibility = callback; } },
@@ -24,6 +24,7 @@ function setup() {
     clearInterval(id) { cleared.add(id); },
     setConnState(state) { states.push(state); },
     onState(message) { messages.push(message); },
+    fwBack() {},
     WebSocket: function () {
       this.readyState = 0;
       this.sent = [];
