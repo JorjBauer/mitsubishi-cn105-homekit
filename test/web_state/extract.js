@@ -160,6 +160,7 @@ const rangeFactory = vm.runInThisContext(
   'addEdits:addRangeEdits,export:exportRangeSettings,import:window.importSettings,\n' +
   'view:rangeView,pick:pickRange,nudge:nudgeRange,next:nextBound,unit:function(u){tempUnit=u},\n' +
   'setCap:setCap,caps:getCapMask,applyCaps:applyCapMask,advertised:advertisedRange,\n' +
+  'lowHeat:applyLowHeat,toggleLowHeat:window.toggleLowHeat,unsaved:hasUnsavedChanges,\n' +
   'dirty:function(){return settingsDirty},pending:function(){return rangePending},\n' +
   'offline:function(){online=false},fireTimers:function(){timers.splice(0).forEach(function(f){f()})},\n' +
   'editDevice:markDeviceEdited,exportFile:function(st){lastState=st;window.exportSettings();return exported}};\n' +

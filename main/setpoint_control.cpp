@@ -48,16 +48,42 @@ Detection rangeReference() {
     }
     return detected;
 }
+// Low heat (CN105_LOW_HEAT_MIN): a Heat range starting at or above the
+// unit's usual floor reaches down to CN105_LOW_HEAT_MIN, and the controller
+// holds the unit at the range's own bottom while it shifts the room feed.
+// A Heat range that already starts lower is the unit's own, so low heat
+// stays off. Returns the floor the controller holds, NAN while off.
+float widenForLowHeat(Snapshot& snapshot) {
+    auto& heat = snapshot.mode[0].range;
+    if (!settings.get().lowHeatEnabled || heat.min2 < CN105_TEMP_MIN * 2) return NAN;
+    const float floorC = heat.min2 / 2.f;
+    heat.min2 = static_cast<int16_t>(CN105_LOW_HEAT_MIN * 2);
+    if (settings.get().modeMask & MODE_CAP_HEAT) {
+        snapshot.advertised.min2 = std::min(snapshot.advertised.min2, heat.min2);
+        snapshot.ftabId = 0;  // below the compatibility range
+    }
+    return floorC;
+}
+Snapshot resolveRanges(const Preferences& preferences, const Detection& reference,
+                       Encoding current, Encoding lastKnown, float* lowHeatFloor = nullptr) {
+    auto snapshot = resolve(preferences, reference, current, lastKnown, settings.get().modeMask);
+    const float floorC = widenForLowHeat(snapshot);
+    if (lowHeatFloor) *lowHeatFloor = floorC;
+    return snapshot;
+}
 Snapshot resolveSettings(const SetpointSettings& cfg, const CN105State& state) {
-    return resolve(cfg.preferences, rangeReference(), state.encoding,
-                   cfg.lastEncoding, settings.get().modeMask);
+    return resolveRanges(cfg.preferences, rangeReference(), state.encoding, cfg.lastEncoding);
 }
 void refresh() {
     resolvedState = controller->getState();
-    auto next = resolveSettings(settings.setpointSettings(), resolvedState);
+    const auto cfg = settings.setpointSettings();
+    float floorC;
+    auto next = resolveRanges(cfg.preferences, rangeReference(), resolvedState.encoding,
+                              cfg.lastEncoding, &floorC);
+    controller->setLowHeatFloor(floorC);
     next.generation = published.generation + (!sameSnapshot(next, published) ? 1 : 0);
     published = next;
-    effectiveBand = projectBand(settings.setpointSettings().band, published.mode[2]);
+    effectiveBand = projectBand(cfg.band, published.mode[2]);
 }
 CN105Command merged(CN105Command old, const CN105Command& next) {
     if (next.power && !*next.power) old = {};
@@ -91,7 +117,13 @@ Result normalizeCommand(CN105Command& cmd, const Snapshot& ranges, const CN105St
     const auto& range = ranges.mode[index];
     const auto result = available(range);
     if (result != Result::Ok) return result;
-    cmd.targetTemp = normalizeTarget(cmd.targetTemp.value_or(state.targetTemp), range, ranges.encoding);
+    // Retained intent in HEAT includes a low heat target the unit cannot
+    // show: its floor, before a room source feeds it or after another mode.
+    float retained = state.targetTemp;
+    const float lowC = controller->lowHeatTarget();
+    if (mode == CN105_MODE_HEAT && std::isfinite(lowC) &&
+        fabsf(retained - controller->lowHeatFloor()) < 0.3f) retained = lowC;
+    cmd.targetTemp = normalizeTarget(cmd.targetTemp.value_or(retained), range, ranges.encoding);
     return std::isfinite(*cmd.targetTemp) ? Result::Ok : Result::Invalid;
 }
 Status statusFor(const CN105State& state, const CN105State& effective) {
@@ -139,14 +171,16 @@ SettingsView settingsView() {
     std::lock_guard<std::mutex> lock(controlMutex);
     SettingsView view{};
     view.saved = settings.setpointSettings();
+    view.lowHeatFloor = NAN;
     if (!controller) {
         view.status = {Condition::Pending, NAN, NAN, false};
         return view;
     }
     resolvedState = controller->getState();
     view.reference = rangeReference();
-    auto next = resolve(view.saved.preferences, view.reference, resolvedState.encoding,
-                        view.saved.lastEncoding, settings.get().modeMask);
+    auto next = resolveRanges(view.saved.preferences, view.reference, resolvedState.encoding,
+                              view.saved.lastEncoding, &view.lowHeatFloor);
+    controller->setLowHeatFloor(view.lowHeatFloor);
     next.generation = published.generation + (!sameSnapshot(next, published) ? 1 : 0);
     published = next;
     effectiveBand = projectBand(view.saved.band, published.mode[2]);

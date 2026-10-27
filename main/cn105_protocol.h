@@ -6,6 +6,7 @@
 #include <cstdint>
 #include <cstddef>
 #include <cstring>
+#include <cmath>
 #include "esp_utils.h"
 #include <driver/uart.h>
 #include <driver/gpio.h>
@@ -104,6 +105,14 @@ constexpr float CN105_TEMP_MIN         = 16.0f;
 // encoding still uses a fixed 31 °C origin (cn105_protocol.cpp) — that is the
 // protocol datum, not the settable ceiling, and is intentionally left at 31.
 constexpr float CN105_TEMP_MAX         = 30.5f;
+
+// Low heat (Modes > Heat > Extended Heat Range in the web UI). The unit
+// refuses a heat setpoint below its own floor (the bottom of the Heat range,
+// normally CN105_TEMP_MIN), so a lower target is reached by holding the unit
+// at that floor and feeding it a room temperature raised by the difference.
+// It thinks the room is that much warmer and stops heating that much sooner.
+// Only possible while an external room source is feeding the unit.
+constexpr float CN105_LOW_HEAT_MIN     = 10.0f;  // 50 °F
 
 // ── Timing ──────────────────────────────────────────────────────────────────
 // Follows MitsubishiCN105ESPHome reference project timing
@@ -289,6 +298,23 @@ public:
     /// (e.g. the BLE keepalive's change detection).
     static float quantizeRemoteTemp(float tempC);
 
+    /// Low heat: the unit's own heat floor while low heat extends below it,
+    /// NAN while it does not (setting off, or a Heat range that already starts
+    /// lower). Set by SetpointControl from the resolved Heat range. NAN, or a
+    /// new floor at or below the low target, drops that target, so with low
+    /// heat off the controller behaves as it did before the feature existed.
+    void setLowHeatFloor(float floorC);
+    float lowHeatFloor() const;
+
+    /// The HEAT target below the floor the user asked for, NAN if none. The
+    /// owner persists it, since the unit itself only ever holds the floor.
+    float lowHeatTarget() const;
+
+    /// Boot: re-adopt a persisted low target. Sends nothing; the unit kept
+    /// the floor across the restart, and if it holds anything else in HEAT
+    /// the first SETTINGS response drops the target again.
+    void restoreLowHeatTarget(float tempC);
+
     /// The clamp + rounding the SET path applies to a target temperature —
     /// i.e. the setpoint the heat pump will report back after accepting it.
     /// Public for the same reason as quantizeRemoteTemp(): callers that
@@ -457,6 +483,16 @@ private:
     float    _pendingRemoteTempC = 0.0f;   // only read while _pendingRemoteTemp is set
     bool     _remoteWritten      = false;  // any send/clearRemoteTemperature() since boot
 
+    // ── Low heat (see CN105_LOW_HEAT_MIN) ─────────────────────────────────
+    // All under _mux except _remoteShiftSentC. _lowHeatFloorC is NAN while
+    // low heat is off. _remoteRealC is what the room source last fed, before
+    // any shift (NAN = not feeding). _remoteShiftSentC is CN105-task state:
+    // the shift riding on the last remote temperature transmitted.
+    float    _lowHeatFloorC      = NAN;
+    float    _lowHeatTargetC     = NAN;
+    float    _remoteRealC        = NAN;
+    float    _remoteShiftSentC   = 0.0f;
+
     // ── First-connect clear (CN105 task only) ─────────────────────────────
     // The pump keeps a fed remote temperature across a controller restart.
     // Armed by each CONNECT_OK until it has run once; runs when that
@@ -498,6 +534,10 @@ private:
     void handleInfoResponse(const uint8_t *data, uint8_t dataLen);
     void readSerial();
     void sendRemoteTempPacket(float tempC);
+    uint8_t effectiveModeLocked(uint32_t now) const;
+    float lowHeatShiftLocked(uint8_t mode) const;
+    float lowHeatStageLocked(float tempC, uint8_t mode);
+    static void applyLowHeat(CN105State &s, float floorC, float lowC, float realC);
     void applyBaudRate(uint32_t baud);
     void restartHandshake();
 };

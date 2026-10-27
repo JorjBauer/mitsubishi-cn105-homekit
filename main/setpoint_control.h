@@ -18,6 +18,7 @@ struct SettingsView {
     SetpointRange::Band effectiveBand; // Operational thresholds; saved.band retains intent.
     SetpointRange::Detection reference;
     Status status;
+    float lowHeatFloor;  // NAN unless low heat widens the Heat range below it
 };
 SettingsView settingsView();
 void begin(CN105Controller&);

@@ -252,6 +252,33 @@ const limits=(v)=>({custom:v.custom,min:v.min,max:v.max});
   same(ui.advertised(),{min:16,max:30.5},'Fan alone: the firmware falls back to the compatibility range');
 }
 
+// Low heat: the Heat range the firmware sends is widened to 10 °C. The Modes
+// page shows the unit's own range, and the advertised range (Home app, Link)
+// follows the edited setting until it is saved.
+{
+  const {newRanges}=require('./extract.js');
+  const ui=newRanges();
+  const ranges={heat:{min:10,max:30.5,step:0.5,selection:'automatic',manualMin:0,manualMax:0,reference:{min:16,max:31,source:'fresh'}},
+    cool:{min:16,max:30.5,step:0.5,selection:'automatic',manualMin:0,manualMax:0,reference:{min:16,max:31,source:'fresh'}},
+    auto:{min:19,max:28,step:0.5,selection:'automatic',manualMin:0,manualMax:0,reference:{min:19,max:28,source:'fresh'}}};
+  ui.render({setpointRanges:ranges,lowHeatFloor:16});
+  ui.applyCaps(31);
+  ui.lowHeat(true);
+  same(ui.view('Heat').min,16,'the Heat page shows the unit floor, not the low heat reach');
+  same(ui.advertised().min,10,'Home app and Link reach down to 10 °C');
+  same(ui.unsaved(),false,'a pushed setting is not an edit');
+  ui.toggleLowHeat({checked:false});
+  same([ui.advertised().min,ui.unsaved()],[16,true],'turning it off is an unsaved edit');
+  ui.lowHeat(true);
+  same(ui.advertised().min,16,'a push of the saved value keeps the edit');
+  ui.submit({cmd:'config',lowHeat:false},'Settings saved');
+  ui.ack({type:'rangeResult',requestId:ui.sent[ui.sent.length-1].requestId,ok:true});
+  same(ui.unsaved(),false,'saving settles it');
+  ui.render({setpointRanges:Object.assign({},ranges,{heat:Object.assign({},ranges.heat,{min:16})}),lowHeatFloor:null});
+  ui.lowHeat(false);
+  same([ui.view('Heat').min,ui.advertised().min],[16,16],'off: the unit range throughout');
+}
+
 // Whole-policy rollback preserves the exact profile/band used by real export.
 {
   const {newRanges}=require('./extract.js');

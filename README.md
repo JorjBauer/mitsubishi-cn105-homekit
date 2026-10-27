@@ -327,6 +327,18 @@ The **Room Sensor** card carries the BLE settings on boards with Bluetooth:
 - **Manage Sensors** — rename or remove a sensor, and set a calibration offset per sensor (±9.9 °C, entered in the display unit), applied to each reading before it is used or averaged
 - **Indicators** — green (healthy), orange (stale or no data yet), gray (not configured)
 
+### Extended Heat Range
+
+Most Mitsubishi units won't accept a heat setpoint below 61 °F (16 °C). For a garage or workshop, open **Modes › Heat** in the web UI and turn on **Extended Heat Range** to allow heat setpoints down to 50 °F (10 °C). Apple Home and a paired Link follow the wider Heat range on their own; there's no restart.
+
+The unit never actually sees those setpoints. Below the bottom of the Heat range (61 °F on most units) we hold the unit there and feed it a room temperature raised by the difference. With a 55 °F target and the garage at 53 °F, the unit is told the room is 59 °F, so it heats until the garage reaches 55 °F. Apple Home, the web UI and the Link show the real room temperature and the real target.
+
+You could get part of this with a sensor calibration offset, but that's fixed until you edit it, it applies in Cool too, and Apple Home ends up showing the offset reading. Here the shift follows whatever target you set, only exists in Heat mode, and nothing reports the made-up number.
+
+This needs a room sensor (BLE or Serin Link) feeding the unit. With no sensor, or when the sensor goes stale, the unit falls back to its own thermistor and holds a real 61 °F, and that is what Apple Home shows. Setting a different temperature from the IR remote cancels the extended target.
+
+If your Heat range already starts below 61 °F (because the unit reports a lower limit, or you set Custom Limits that low), the unit takes those setpoints itself and this setting stays out of the way.
+
 ## Serin Link
 
 Serin Link is an accessory physical dial with a display that mirrors the unit's live state and controls power, mode, setpoint, fan, and vanes over an encrypted wireless link. All HVAC logic stays on the unit, so the dial and Apple Home always report the same state.

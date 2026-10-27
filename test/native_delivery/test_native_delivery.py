@@ -219,7 +219,7 @@ struct DeviceSettings{
  uint8_t modeMask=MODE_CAP_ALL,vaneConfig=2,nightCeilPct=20;
  float heatingThreshold=20,coolingThreshold=25,latitude=NAN,longitude=NAN;
  int16_t nightDuskOffMin=0,nightDawnOffMin=0;
- bool useFahrenheit=false,autoOwnerUnit=false;
+ bool useFahrenheit=false,autoOwnerUnit=false,lowHeatEnabled=false;
  char deviceName[32]="Test";
 };
 struct SetpointSettings {
@@ -337,7 +337,7 @@ ws = (MAIN / "web_ws.cpp").read_text()
 start = ws.index('    bool hkReady = homekit_is_started();')
 HOMEKIT += ws[start:ws.index('    section();', start)] + "\nreturn buf;}\n"
 
-CONTROL = CN105 + (HERE / "homekit_stubs.inc").read_text().replace("constexpr float CN105_TEMP_MIN=16.0f, CN105_TEMP_MAX=30.5f;", "")
+CONTROL = CN105 + (HERE / "homekit_stubs.inc").read_text().replace("constexpr float CN105_TEMP_MIN=16.0f, CN105_TEMP_MAX=30.5f, CN105_LOW_HEAT_MIN=10.0f;", "")
 CONTROL += "\n" + clean("settings.h") + clean("settings.cpp").replace('static const char *TAG', 'static const char *settings_TAG')
 if (MAIN / "setpoint_control.h").exists():
     CONTROL += "\n" + function(strings, "modeToCapBit") + "\n" + function(strings, "mode_mask_allows")
@@ -470,7 +470,7 @@ static json_gen_str_t sdk_characteristic(hap_char_t*hc){
 ''' + sdk_ip[start:end] + "\nreturn jstr;}\n"
 
 SOURCES = {"link_ranges": LINK_RANGES,"web_ranges": WEB,"homekit_ranges": RANGES,"setpoint_control": CONTROL, "cn105_polling": CN105 + PUMP, "cn105_float_setters": CN105 + PUMP,
-           "cn105_capabilities": CN105 + PUMP,
+           "cn105_capabilities": CN105 + PUMP, "cn105_low_heat": CN105 + PUMP,
            "link_source": LINK, "ble_handoff": BLE, "auto_band": AUTO,
            "factory_reset": FACTORY, "homekit_pairing": HOMEKIT, "setpoint_settings": HOMEKIT}
 failed = False

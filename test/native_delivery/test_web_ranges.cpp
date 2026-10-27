@@ -248,4 +248,15 @@ int main(int,char**argv){
   CHECK(settings.setpointSettings().band.cool2 == 49);
  }
 
+ CASE("low_heat_setting_and_floor") {
+  CHECK(!strstr(webRangeState(8192).c_str(),"\"lowHeatFloor\":16"));
+  settings.get().lowHeatEnabled=true;
+  auto root=webParseObject(webRangeState(8192).c_str());
+  CHECK(root);
+  CHECK(cJSON_GetObjectItemCaseSensitive(root.get(),"lowHeatFloor")->valuedouble==16);
+  const auto* heat=cJSON_GetObjectItemCaseSensitive(cJSON_GetObjectItemCaseSensitive(root.get(),"setpointRanges"),"heat");
+  CHECK(cJSON_GetObjectItemCaseSensitive(heat,"min")->valuedouble==10);
+  CHECK(apply(R"({"cmd":"config","lowHeat":"yes"})")==Result::Invalid);
+ }
+
 }

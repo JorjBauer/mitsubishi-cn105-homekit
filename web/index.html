@@ -1239,6 +1239,10 @@ a:focus-visible,button:focus-visible,input:focus-visible,select:focus-visible{ou
       <div><div class="lbl">Available</div><div class="sub" id="mpAvailSub" hidden>Needs Heat and Cool</div></div>
       <label class="ios-toggle"><input type="checkbox" id="mpAvail" onchange="toggleModeCap(this)" aria-label="Available on this unit"><span class="ios-toggle-slider"></span></label>
     </div>
+    <div class="inset-row" id="mpLowHeatRow" hidden>
+      <div><div class="lbl">Extended Heat Range</div><div class="sub" id="mpLowHeatSub"></div></div>
+      <label class="ios-toggle"><input type="checkbox" id="mpLowHeat" onchange="toggleLowHeat(this)" aria-label="Extended heat range: heat setpoints below the heat pump's own minimum"><span class="ios-toggle-slider"></span></label>
+    </div>
   </div>
   <div id="mpRange">
     <h3 class="mode-label" id="mpRangeLbl"></h3>
@@ -2502,6 +2506,7 @@ a:focus-visible,button:focus-visible,input:focus-visible,select:focus-visible{ou
       if(s.vaneConfig!=null) setActive('vaneTypeGrp',String(s.vaneConfig));
       if(s.cn105Baud!=null) setActive('baudGrp',String(s.cn105Baud));
       if(s.modeMask!=null) applyCapMask(s.modeMask);
+      if(s.lowHeat!=null) applyLowHeat(!!s.lowHeat);
     }
     if(s.nightLat!=null&&!$('cfgNightLat').matches(':focus')) $('cfgNightLat').value=s.nightLat;
     if(s.nightLon!=null&&!$('cfgNightLon').matches(':focus')) $('cfgNightLon').value=s.nightLon;
@@ -3479,6 +3484,10 @@ a:focus-visible,button:focus-visible,input:focus-visible,select:focus-visible{ou
   var CAP_HEAT_COOL=CAP_BITS.heat|CAP_BITS.cool,CAP_REAL=CAP_HEAT_COOL|CAP_BITS.dry|CAP_BITS.fan;
   // capSaved is the mask the device holds; capMask the edited copy (null until the first push).
   var capMask=null,capSaved=null,lastCapMask=null,deviceEdited=false;
+  // Low heat: the saved setting, the edited copy (both null until the first
+  // push), and the unit's own heat floor while low heat reaches below it.
+  var lowHeatSaved=null,lowHeatDraft=null,lowHeatFloor=null;
+  var LOW_HEAT_MIN=10;  // CN105_LOW_HEAT_MIN in main/cn105_protocol.h
   // The range each mode uses (Dry shares Cool's, Fan has none) and the modes keeping each range in use.
   var MODE_RANGE={heat:'Heat',cool:'Cool',auto:'Auto',dry:'Cool',fan:null};
   var RANGE_CAPS={Heat:CAP_BITS.heat,Cool:CAP_BITS.cool|CAP_BITS.dry,Auto:CAP_BITS.auto};
@@ -3487,7 +3496,7 @@ a:focus-visible,button:focus-visible,input:focus-visible,select:focus-visible{ou
   // Device card fields keep no saved copy to compare against, so any edit counts.
   function markDeviceEdited(){deviceEdited=true;markSettingsEdited();}
   function hasUnsavedChanges(){
-    return deviceEdited||capMask!==capSaved||RANGE_NAMES.some(function(name){return rangeDraft[name]&&rangeDraft[name].dirty;});
+    return deviceEdited||capMask!==capSaved||lowHeatDraft!==lowHeatSaved||RANGE_NAMES.some(function(name){return rangeDraft[name]&&rangeDraft[name].dirty;});
   }
   // Save lights up only while something differs from the device, and rests while a save is in flight.
   function renderSaveState(){
@@ -3540,7 +3549,7 @@ a:focus-visible,button:focus-visible,input:focus-visible,select:focus-visible{ou
     renderSaveState();
     if(!msg.ok){saveFailed(msg.msg||'Could not save settings');return;}
     if(pending.version!==rangeEditVersion){rangeStatus('Earlier changes saved. Save your latest edits.',false);return;}
-    settingsDirty=false;deviceEdited=false;capSaved=capMask;
+    settingsDirty=false;deviceEdited=false;capSaved=capMask;lowHeatSaved=lowHeatDraft;
     RANGE_NAMES.forEach(function(name){if(rangeDraft[name])rangeDraft[name].dirty=false;});
     renderSaveState();
     rangeStatus(pending.success||'Settings saved',false);
@@ -3549,10 +3558,11 @@ a:focus-visible,button:focus-visible,input:focus-visible,select:focus-visible{ou
   function renderRangeSettings(st){
     if(!st.setpointRanges) return;
     rangeState=st.setpointRanges;
+    lowHeatFloor=st.lowHeatFloor!=null?st.lowHeatFloor:null;
     RANGE_NAMES.forEach(function(name){
       var r=rangeOf(name),draft=rangeDraft[name];
       if(r&&(!draft||!draft.dirty))
-        rangeDraft[name]={source:r.selection,min:r.manualMin>=10?r.manualMin:r.min,max:r.manualMax>=10?r.manualMax:r.max,dirty:false};
+        rangeDraft[name]={source:r.selection,min:r.manualMin>=10?r.manualMin:name==='Heat'&&lowHeatFloor!=null?lowHeatFloor:r.min,max:r.manualMax>=10?r.manualMax:r.max,dirty:false};
     });
     renderModes();
   }
@@ -3565,7 +3575,8 @@ a:focus-visible,button:focus-visible,input:focus-visible,select:focus-visible{ou
     var r=rangeOf(name),d=rangeDraft[name];
     if(!r||!d) return null;
     var lim=COMPAT_RANGE;
-    if(!d.dirty) lim=r;
+    // Low heat widens the resolved Heat range; this page shows the unit's own.
+    if(!d.dirty) lim=name==='Heat'&&lowHeatFloor!=null?{min:lowHeatFloor,max:r.max}:r;
     else if(d.source==='manual') lim=d;
     else if(d.source==='automatic'&&r.reference) lim=r.reference;
     return {min:lim.min,max:lim.max,custom:d.source!=='automatic',reference:r.reference};
@@ -3621,6 +3632,29 @@ a:focus-visible,button:focus-visible,input:focus-visible,select:focus-visible{ou
   function capOn(key){return capMask!=null&&!!(capMask&CAP_BITS[key]);}
   function autoBlocked(key){return key==='auto'&&capMask!=null&&(capMask&CAP_HEAT_COOL)!==CAP_HEAT_COOL;}
   function getCapMask(){return capMask;}
+  function applyLowHeat(on){
+    if(on===lowHeatSaved) return;  // runs on every 1 Hz push; skip unchanged
+    if(lowHeatDraft===lowHeatSaved) lowHeatDraft=on;
+    lowHeatSaved=on;
+    renderModes();
+  }
+  // Heat page only. Saved but not reaching below the Heat range means that
+  // range already starts lower, at the unit's own say.
+  function renderLowHeat(key,on){
+    var row=$('mpLowHeatRow'),show=key==='heat'&&on&&lowHeatDraft!=null;
+    row.hidden=!show;
+    if(!show) return;
+    $('mpLowHeat').checked=lowHeatDraft;
+    var floor=lowHeatFloor!=null?lowHeatFloor:COMPAT_RANGE.min;
+    $('mpLowHeatSub').textContent=lowHeatSaved&&lowHeatDraft&&lowHeatFloor==null
+      ?'Not in use: the Heat range already starts below '+fmtLimit(COMPAT_RANGE.min)+'°.'
+      :'Heat setpoints down to '+fmtLimit(LOW_HEAT_MIN)+'°. The heat pump is held at '+fmtLimit(floor)+'° and fed a room temperature raised by the difference, while Apple Home and this page show the real temperatures. Needs a room sensor (BLE or Serin Link); without one, the unit holds '+fmtLimit(floor)+'°.';
+  }
+  window.toggleLowHeat=function(input){
+    if(lowHeatDraft==null){input.checked=false;return;}
+    lowHeatDraft=input.checked;
+    markSettingsEdited();renderModes();
+  };
   function applyCapMask(m){
     if(m===lastCapMask)return;  // runs on every 1 Hz push; skip unchanged
     lastCapMask=capMask=capSaved=m;
@@ -3641,13 +3675,15 @@ a:focus-visible,button:focus-visible,input:focus-visible,select:focus-visible{ou
   }
   // What HomeKit and a paired Link offer: the union of the enabled modes' ranges,
   // or the compatibility range when only Fan is on (resolve() in setpoint_range.cpp).
+  // Low heat reaches Heat down to LOW_HEAT_MIN (widenForLowHeat() in setpoint_control.cpp).
   function advertisedRange(){
     if(capMask==null) return null;
     var a=null;
     RANGE_NAMES.forEach(function(name){
       var v=rangeView(name);
       if(!v||!(capMask&RANGE_CAPS[name])) return;
-      a=a?{min:Math.min(a.min,v.min),max:Math.max(a.max,v.max)}:{min:v.min,max:v.max};
+      var min=name==='Heat'&&lowHeatDraft&&v.min>=COMPAT_RANGE.min?LOW_HEAT_MIN:v.min;
+      a=a?{min:Math.min(a.min,min),max:Math.max(a.max,v.max)}:{min:min,max:v.max};
     });
     return a||{min:COMPAT_RANGE.min,max:COMPAT_RANGE.max};
   }
@@ -3663,7 +3699,7 @@ a:focus-visible,button:focus-visible,input:focus-visible,select:focus-visible{ou
     MODE_KEYS.forEach(function(key){
       var on=capOn(key),name=MODE_RANGE[key],v=name&&rangeView(name),sub='',val='';
       if(!on){val=capMask==null?'':'Off';if(autoBlocked(key))sub='Needs Heat and Cool';}
-      else if(v){sub=rangeTag(v)+(rangeDraft[name].dirty?' · Edited':'');val=fmtLimits(v);}
+      else if(v){sub=rangeTag(v)+(key==='heat'&&lowHeatDraft?' · Extended':'')+(rangeDraft[name].dirty?' · Edited':'');val=fmtLimits(v);}
       $('modeSub-'+key).textContent=sub;
       $('modeSub-'+key).hidden=!sub;
       $('modeVal-'+key).textContent=val;
@@ -3686,6 +3722,7 @@ a:focus-visible,button:focus-visible,input:focus-visible,select:focus-visible{ou
     $('mpAvail').disabled=blocked||capMask==null;
     $('mpAvailRow').classList.toggle('cap-disabled',blocked);
     $('mpAvailSub').hidden=!blocked;
+    renderLowHeat(key,on);
     $('mpTrack').hidden=$('mpRange').hidden=!v;
     if(!v) return;
     var ref=v.reference,out=v.custom&&ref&&(v.min<ref.min||v.max>ref.max);
@@ -3777,6 +3814,7 @@ a:focus-visible,button:focus-visible,input:focus-visible,select:focus-visible{ou
     };
     // Before the first state push there is no mask to send; the device keeps its own.
     if(getCapMask()!=null) cfg.modeMask=getCapMask();
+    if(lowHeatDraft!=null) cfg.lowHeat=lowHeatDraft;
     try{submitCheckedConfig(addRangeEdits(cfg),'Settings saved');}
     catch(e){saveFailed(e.message);}
 
@@ -4332,7 +4370,7 @@ a:focus-visible,button:focus-visible,input:focus-visible,select:focus-visible{ou
     if(!s){showToast('Not connected — nothing to export',true);return}
     var out={app:'cn105-homekit-settings',v:1,fw:RUNNING_FW_VER,exported:new Date().toISOString(),
       settings:{deviceName:s.deviceName,tempUnit:s.tempUnit,pollInterval:s.pollInterval,cn105Baud:s.cn105Baud,logLevel:s.logLevel,
-        vaneConfig:s.vaneConfig,modeMask:s.modeMask,heatThresh:s.savedHeatThresh!=null?s.savedHeatThresh:s.heatThresh,coolThresh:s.savedCoolThresh!=null?s.savedCoolThresh:s.coolThresh}};
+        vaneConfig:s.vaneConfig,modeMask:s.modeMask,lowHeat:s.lowHeat,heatThresh:s.savedHeatThresh!=null?s.savedHeatThresh:s.heatThresh,coolThresh:s.savedCoolThresh!=null?s.savedCoolThresh:s.coolThresh}};
     exportRangeSettings(s,out.settings);
     // roomSource is not BLE-specific (Internal/Link don't need BLE at all), so
     // it rides at the top level rather than inside the ble sub-object.
@@ -4372,6 +4410,7 @@ a:focus-visible,button:focus-visible,input:focus-visible,select:focus-visible{ou
       if(typeof st.logLevel==='number') cfg.logLevel=st.logLevel;
       if(typeof st.vaneConfig==='number') cfg.vaneConfig=st.vaneConfig;
       if(typeof st.modeMask==='number') cfg.modeMask=st.modeMask;
+      if(typeof st.lowHeat==='boolean') cfg.lowHeat=st.lowHeat;
       if(typeof st.roomSource==='number') cfg.roomSource=st.roomSource;
       if(typeof st.roomTimeout==='number') cfg.bleTimeout=st.roomTimeout;
       if(st.ble){

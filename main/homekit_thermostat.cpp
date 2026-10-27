@@ -362,7 +362,8 @@ static void publish_thermostat(CN105Controller& cn105)
     // Current temperature — when the averaging blend is feeding the pump,
     // report its effective (offset-applied) value so Apple Home matches what
     // the pump is actually controlling on; otherwise the pump's own reported
-    // room temp (which already echoes any single-source feed).
+    // room temp (which already echoes any single-source feed, and under low
+    // heat is the real reading, not the shifted one the unit sees).
     if (s_currentTemp) {
         float room = s.roomTemp;
         RoomAvg::Status av = RoomAvg::status();

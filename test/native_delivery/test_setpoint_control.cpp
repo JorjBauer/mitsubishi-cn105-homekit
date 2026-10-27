@@ -247,4 +247,49 @@ int main(int,char**argv){
   ticks(c,300);c.restartHandshake();now_ms+=4000;ticks(c,300);SetpointControl::loop();CHECK(!c.commandsHeld());CHECK(!c.heldCommand().targetTemp);
  }
 
+ // Low heat (widenForLowHeat): the Heat range reaches CN105_LOW_HEAT_MIN, the
+ // unit is held at the range's own bottom, and other ranges keep theirs.
+ CASE("low_heat_widens_heat_only") {
+  settings.get().lowHeatEnabled=true;SetpointControl::loop();
+  const auto s=SetpointControl::snapshot();
+  CHECK(s.mode[0].range.min2==20);CHECK(s.mode[1].range.min2==32);CHECK(s.advertised.min2==20);CHECK(s.ftabId==0);
+  CHECK(c.lowHeatFloor()==16);
+  SetpointControl::Command cmd;cmd.unit.targetTemp=12;CHECK(SetpointControl::submit(cmd)==Result::Ok);ticks(c,300);
+  CHECK(pump.target==160);CHECK(c.lowHeatTarget()==12);
+  cmd={};cmd.unit.mode=CN105_MODE_COOL;cmd.unit.targetTemp=12;CHECK(SetpointControl::submit(cmd)==Result::OutsideRange);
+ }
+ CASE("low_heat_off_restores_range") {
+  settings.get().lowHeatEnabled=true;SetpointControl::loop();
+  SetpointControl::Command cmd;cmd.unit.targetTemp=12;CHECK(SetpointControl::submit(cmd)==Result::Ok);ticks(c,300);
+  settings.get().lowHeatEnabled=false;SetpointControl::loop();
+  CHECK(std::isnan(c.lowHeatFloor()));CHECK(std::isnan(c.lowHeatTarget()));
+  CHECK(SetpointControl::snapshot().mode[0].range.min2==32);CHECK(SetpointControl::snapshot().ftabId==1);
+  CHECK(SetpointControl::submit(cmd)==Result::OutsideRange);
+ }
+ CASE("low_heat_yields_to_lower_heat_range") {
+  manual(0,10,30);settings.get().lowHeatEnabled=true;SetpointControl::loop();
+  CHECK(std::isnan(c.lowHeatFloor()));
+  SetpointControl::Command cmd;cmd.unit.targetTemp=12;CHECK(SetpointControl::submit(cmd)==Result::Ok);ticks(c,300);
+  CHECK(pump.target==152);CHECK(std::isnan(c.lowHeatTarget()));
+ }
+ CASE("low_heat_follows_heat_range_floor") {
+  manual(0,17,30);settings.get().lowHeatEnabled=true;SetpointControl::loop();
+  CHECK(c.lowHeatFloor()==17);CHECK(SetpointControl::snapshot().mode[0].range.min2==20);
+  SetpointControl::Command cmd;cmd.unit.targetTemp=12;CHECK(SetpointControl::submit(cmd)==Result::Ok);ticks(c,300);
+  CHECK(pump.target==162);CHECK(c.lowHeatTarget()==12);
+ }
+ CASE("low_heat_retained_through_power_and_mode") {
+  // No room source: the unit shows its floor, yet the low target is the intent.
+  settings.get().lowHeatEnabled=true;SetpointControl::loop();
+  SetpointControl::Command cmd;cmd.unit.targetTemp=13;CHECK(SetpointControl::submit(cmd)==Result::Ok);ticks(c,1500);
+  CHECK(pump.target==160);CHECK(c.getEffectiveState().targetTemp==16);
+  cmd={};cmd.unit.power=false;CHECK(SetpointControl::submit(cmd)==Result::Ok);ticks(c,300);CHECK(!pump.power);
+  cmd={};cmd.unit.power=true;CHECK(SetpointControl::submit(cmd)==Result::Ok);ticks(c,300);
+  CHECK(pump.power);CHECK(pump.target==160);CHECK(c.lowHeatTarget()==13);
+  cmd={};cmd.unit.mode=CN105_MODE_COOL;CHECK(SetpointControl::submit(cmd)==Result::Ok);ticks(c,1500);
+  CHECK(pump.mode==CN105_MODE_COOL);CHECK(pump.target==160);CHECK(c.lowHeatTarget()==13);
+  cmd={};cmd.unit.mode=CN105_MODE_HEAT;CHECK(SetpointControl::submit(cmd)==Result::Ok);ticks(c,300);
+  CHECK(pump.mode==CN105_MODE_HEAT);CHECK(pump.target==160);CHECK(c.lowHeatTarget()==13);
+ }
+
 }

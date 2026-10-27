@@ -248,7 +248,7 @@ static bool webConfigTypes(const cJSON* root) {
         if (cJSON_HasObjectItem(root, key) && !webGetInt(root, key, &integer)) return false;
     for (const char* key : {"deviceName", "trustedHost", "tempUnit", "bleAddr", "bleAddMac", "bleAddName", "bleRenName"})
         if (cJSON_HasObjectItem(root, key) && !cJSON_IsString(cJSON_GetObjectItemCaseSensitive(root, key))) return false;
-    for (const char* key : {"betaChannel", "bleEnabled"})
+    for (const char* key : {"betaChannel", "bleEnabled", "lowHeat"})
         if (cJSON_HasObjectItem(root, key) && !cJSON_IsBool(cJSON_GetObjectItemCaseSensitive(root, key))) return false;
     return true;
 }
@@ -505,6 +505,15 @@ void WebUI::handleWsMessage(httpd_req_t *req, const char *msg) {
             uint8_t m = mode_mask_sanitize((uint8_t)intVal);
             settings.get().modeMask = m;
             LOG_INFO("Config modeMask=0x%02X", m);
+            changed = true;
+        }
+
+        // SetpointControl widens the Heat range from its next refresh, and
+        // HomeKit, the Link and this page follow the range.
+        bool lowHeatVal;
+        if (webGetBool(parsed.get(), "lowHeat", &lowHeatVal)) {
+            settings.get().lowHeatEnabled = lowHeatVal;
+            LOG_INFO("Config lowHeat=%s", lowHeatVal ? "ON" : "OFF");
             changed = true;
         }
 
@@ -944,6 +953,9 @@ static void webAppendRangeState(char* buf, size_t cap, int* n, int* want) {
     }
     stateAppend(buf, cap, n, want, "},\"rangeCondition\":\"%s\",\"targetReadable\":%s",
                 conditions[static_cast<int>(status.condition)], status.targetReadable ? "true" : "false");
+    if (std::isfinite(view.lowHeatFloor))
+        stateAppend(buf, cap, n, want, ",\"lowHeatFloor\":%.1f", view.lowHeatFloor);
+    else stateAppend(buf, cap, n, want, ",\"lowHeatFloor\":null");
     // Live thresholds and saved export intent share the same policy observation.
     // Keep them in this rollback section so export never combines generations.
     stateAppend(buf, cap, n, want, ",\"heatThresh\":%.1f,\"coolThresh\":%.1f,\"autoUnit\":%s",
@@ -986,14 +998,15 @@ void WebUI::pushState() {
     // (dstLen - 2): header 475 (31-char deviceName + 32-char SSID, both fully
     // escaped, plus roomMembers) + 58 outsideTemp/errorCode/runtime
     // + 183 heap/health + 108 night gate + 387 remote/dial
-    // (escaped model + fw) + 304 remoteDials (four bonded dials) + 470
+    // (escaped model + fw) + 304 remoteDials (four bonded dials) + 486
     // config + HomeKit (setup code + URI) + 195 room/Link + 215 blend +
     // roomOffs + 278 legacy BLE + 928 for four bleSensors[] entries with
-    // 48-char escaped names + 1 closing brace = 3602 B. The complete ranges,
-    // saved preferences/band/owner, three detection references and target status
-    // add at most 1144 B (bounded enum strings and half-degree endpoints).
-    // 3602 + 1144 = 4746 B; 5120 leaves 374 B of headroom. Whole sections
-    // still roll back atomically if future fields exceed that budget.
+    // 48-char escaped names + 1 closing brace = 3618 B. The complete ranges,
+    // saved preferences/band/owner, three detection references, the low heat
+    // floor and target status add at most 1164 B (bounded enum strings and
+    // half-degree endpoints). 3618 + 1164 = 4782 B; 5120 leaves 338 B of
+    // headroom. Whole sections still roll back atomically if future fields
+    // exceed that budget.
     constexpr size_t bufSz = 5120;
     // Tail the sections can never eat, so the closing brace (and the
     // truncation marker) always fit however full the body ran.
@@ -1214,6 +1227,7 @@ void WebUI::pushState() {
         ",\"modeMask\":%d"
         ",\"modeMaskBoot\":%d"
         ",\"trustedHost\":\"%s\""
+        ",\"lowHeat\":%s"
         ",\"hkReady\":%s"
         ",\"hkPaired\":%s"
         ",\"hkControllers\":%d"
@@ -1229,6 +1243,7 @@ void WebUI::pushState() {
         (int)cfg.modeMask,
         (int)(hkReady ? homekit_get_boot_mode_mask() : cfg.modeMask),
         escHost,
+        cfg.lowHeatEnabled ? "true" : "false",
         hkReady ? "true" : "false",
         (cfg.homekitPaired || hkControllers > 0) ? "true" : "false",
         hkControllers,
